@@ -1,14 +1,14 @@
 import { initializeApp } from "firebase/app";
 import { getFirestore, doc, getDoc, setDoc } from "firebase/firestore";
 
-// 🔧 Firebase config của bạn (project: canbomoitsc)
+// 🔧 Firebase config của BẢN 2 (project: canbomoitscv2) — tách biệt hoàn toàn với bản 1
 const firebaseConfig = {
-  apiKey: "AIzaSyBwBMHQk-8IMSef-D3z5vZoraBPetQvON0",
-  authDomain: "canbomoitsc.firebaseapp.com",
-  projectId: "canbomoitsc",
-  storageBucket: "canbomoitsc.firebasestorage.app",
-  messagingSenderId: "710763786127",
-  appId: "1:710763786127:web:3e145a53ae2c0c974625fa",
+  apiKey: "AIzaSyCQaeC_N93sZOQGSXWmZmm6hXm92U9kETY",
+  authDomain: "canbomoitscv2.firebaseapp.com",
+  projectId: "canbomoitscv2",
+  storageBucket: "canbomoitscv2.firebasestorage.app",
+  messagingSenderId: "671828904089",
+  appId: "1:671828904089:web:6155b11d9039f7f00e9008",
 };
 
 const app = initializeApp(firebaseConfig);
