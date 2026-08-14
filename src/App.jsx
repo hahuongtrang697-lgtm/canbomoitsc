@@ -677,6 +677,37 @@ function AdminScreen({ entries, roster, classCode }) {
     XLSX.writeFile(wb, `bao-cao-ung-dung-${todayKey()}.xlsx`);
   };
 
+  const exportSummaryExcel = () => {
+    const wb = XLSX.utils.book_new();
+    const addSheet = (name, rows, colWidths) => {
+      const ws = XLSX.utils.json_to_sheet(rows);
+      ws["!cols"] = colWidths;
+      XLSX.utils.book_append_sheet(wb, ws, name);
+    };
+
+    addSheet("Chưa nhập hôm nay", notDoneToday.map((u) => ({
+      "Tên": u.name, "Email": u.email, "Đơn vị": u.dept,
+      "Trạng thái": u.missedDays !== null ? `Bỏ ${u.missedDays} ngày` : "Chưa bắt đầu",
+    })), [{ wch: 22 }, { wch: 24 }, { wch: 20 }, { wch: 16 }]);
+
+    addSheet("Chưa nhập từ 2 ngày", missing2Days.map((u) => ({
+      "Tên": u.name, "Email": u.email, "Đơn vị": u.dept, "Số ngày bỏ lỡ": u.missedDays,
+    })), [{ wch: 22 }, { wch: 24 }, { wch: 20 }, { wch: 14 }]);
+
+    addSheet("Chưa hoàn thành toàn khóa", notCompletedCourse.map((u) => ({
+      "Tên": u.name, "Email": u.email, "Đơn vị": u.dept,
+      "Số ngày đã làm": `${u.daysLogged}/${PROGRAM_DAYS}`,
+    })), [{ wch: 22 }, { wch: 24 }, { wch: 20 }, { wch: 16 }]);
+
+    addSheet("Theo dõi cá nhân - Toàn lớp", allStats.map((u, i) => ({
+      "STT": i + 1, "Tên": u.name, "Email": u.email, "Đơn vị": u.dept,
+      "Điểm": u.points, "Số ngày đã làm": u.daysLogged, "Streak hiện tại": u.streak,
+    })), [{ wch: 6 }, { wch: 22 }, { wch: 24 }, { wch: 20 }, { wch: 10 }, { wch: 14 }, { wch: 14 }]);
+
+    XLSX.writeFile(wb, `danh-sach-theo-doi-${todayKey()}.xlsx`);
+  };
+
+
   if (selected) {
     const u = allStats.find((x) => x.id === selected);
     return (
@@ -707,12 +738,15 @@ function AdminScreen({ entries, roster, classCode }) {
 
   return (
     <div className="max-w-6xl mx-auto px-5 md:px-8 pt-6 pb-24 md:pb-8">
-      <div className="flex items-center justify-between mb-4">
+      <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
         <div>
           <h1 className="text-lg font-bold text-gray-900">Dashboard Ban tổ chức</h1>
           <Pill tone="blue">Lớp {classCode}</Pill>
         </div>
-        <button onClick={exportExcel} className="flex items-center gap-1.5 brand-bg text-white text-xs font-semibold px-3 py-2 rounded-lg"><Download size={14} /> Xuất Excel</button>
+        <div className="flex items-center gap-2 flex-wrap">
+          <button onClick={exportSummaryExcel} className="flex items-center gap-1.5 bg-gray-100 text-gray-700 text-xs font-semibold px-3 py-2 rounded-lg"><Download size={14} /> Xuất danh sách theo dõi</button>
+          <button onClick={exportExcel} className="flex items-center gap-1.5 brand-bg text-white text-xs font-semibold px-3 py-2 rounded-lg"><Download size={14} /> Xuất chi tiết ứng dụng</button>
+        </div>
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
