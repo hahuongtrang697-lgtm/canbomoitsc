@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo, useCallback, useRef } from "react"
 import * as XLSX from "xlsx";
 import {
   Flame, Trophy, Plus, Clock, BarChart3, LogOut, Heart, Download, X, ChevronRight,
-  Sunrise, AlertCircle, Check, Mail, Lock, Upload, UserPlus, KeyRound, Ban, Trash2,
+  Sunrise, AlertCircle, Check, User, Lock, Upload, UserPlus, KeyRound, Ban, Trash2,
   Menu, LayoutDashboard, Users2, Home as HomeIcon, List, Building2,
 } from "lucide-react";
 import { storage } from "./firebase.js";
@@ -102,7 +102,7 @@ function computeMissedGaps(sortedDays) {
   return gaps.sort((a, b) => b.start - a.start);
 }
 const uid = () => Math.random().toString(36).slice(2, 10);
-const normEmail = (s) => (s || "").trim().toLowerCase();
+const normUsername = (s) => (s || "").trim().toLowerCase();
 
 function computeUserStats(userEntries, earlyBirdDayMap) {
   if (userEntries.length === 0) return { points: 0, streak: 0, longestStreak: 0, daysLogged: 0 };
@@ -194,7 +194,7 @@ const Field = ({ icon: Icon, ...props }) => (
 // ---------- Login ----------
 function LoginScreen({ classIndex, onLoginAttempt, onAdminLogin }) {
   const [mode, setMode] = useState("student");
-  const [email, setEmail] = useState("");
+  const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [pin, setPin] = useState("");
   const [classCode, setClassCode] = useState("");
@@ -202,10 +202,10 @@ function LoginScreen({ classIndex, onLoginAttempt, onAdminLogin }) {
   const [submitting, setSubmitting] = useState(false);
 
   const submitStudent = async () => {
-    if (!email.trim() || !password) { setError("Vui lòng nhập đầy đủ email và mật khẩu."); return; }
+    if (!username.trim() || !password) { setError("Vui lòng nhập đầy đủ User AD và mật khẩu."); return; }
     setSubmitting(true);
     setError("");
-    const res = await onLoginAttempt(email, password);
+    const res = await onLoginAttempt(username, password);
     setSubmitting(false);
     if (res && res.error) setError(res.error);
   };
@@ -235,8 +235,8 @@ function LoginScreen({ classIndex, onLoginAttempt, onAdminLogin }) {
           {mode === "student" ? (
             <div className="space-y-3">
               <div>
-                <label className="text-xs font-medium text-gray-500 mb-1 block">Email</label>
-                <Field icon={Mail} type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="vd: email@vietinbank.vn" />
+                <label className="text-xs font-medium text-gray-500 mb-1 block">User AD</label>
+                <Field icon={User} type="text" value={username} onChange={(e) => setUsername(e.target.value)} placeholder="vd: tranghh" autoCapitalize="none" />
               </div>
               <div>
                 <label className="text-xs font-medium text-gray-500 mb-1 block">Mật khẩu</label>
@@ -518,17 +518,17 @@ function LeaderboardScreen({ entries, roster, currentUserId }) {
 function AdminAccountsScreen({ roster, defaultPassword, classCode, onAdd, onBulkImport, onToggleLock, onResetPassword, onDelete, onDefaultPasswordChange, onDeleteClass }) {
   const [name, setName] = useState("");
   const [confirmText, setConfirmText] = useState("");
-  const [email, setEmail] = useState("");
+  const [username, setUsername] = useState("");
   const [dept, setDept] = useState("");
   const [error, setError] = useState("");
   const [importMsg, setImportMsg] = useState("");
   const fileRef = useRef(null);
 
   const addManual = () => {
-    if (!name.trim() || !email.trim()) { setError("Vui lòng nhập họ tên và email."); return; }
-    if (roster.some((u) => normEmail(u.email) === normEmail(email))) { setError("Email này đã tồn tại."); return; }
-    onAdd({ name: name.trim(), email: email.trim(), dept: dept.trim() });
-    setName(""); setEmail(""); setDept(""); setError("");
+    if (!name.trim() || !username.trim()) { setError("Vui lòng nhập họ tên và User AD."); return; }
+    if (roster.some((u) => normUsername(u.username) === normUsername(username))) { setError("User AD này đã tồn tại."); return; }
+    onAdd({ name: name.trim(), username: normUsername(username), dept: dept.trim() });
+    setName(""); setUsername(""); setDept(""); setError("");
   };
 
   const handleFile = async (e) => {
@@ -543,12 +543,12 @@ function AdminAccountsScreen({ roster, defaultPassword, classCode, onAdd, onBulk
       const pick = (row, keys) => { for (const k of keys) { const found = Object.keys(row).find((rk) => rk.toLowerCase().trim() === k); if (found && row[found]) return String(row[found]).trim(); } return ""; };
       const parsed = rows.map((row) => ({
         name: pick(row, ["họ tên", "ho ten", "name", "họ và tên"]),
-        email: pick(row, ["email", "e-mail"]),
+        username: pick(row, ["user ad", "user", "username", "tên đăng nhập"]),
         dept: pick(row, ["đơn vị", "don vi", "dept", "phòng", "chi nhánh"]),
-      })).filter((r) => r.email && r.name);
-      if (parsed.length === 0) { setImportMsg("Không tìm thấy dữ liệu hợp lệ. Cần cột: Họ tên, Email, Đơn vị."); return; }
+      })).filter((r) => r.username && r.name);
+      if (parsed.length === 0) { setImportMsg("Không tìm thấy dữ liệu hợp lệ. Cần cột: Họ tên, User AD, Đơn vị."); return; }
       const added = onBulkImport(parsed);
-      setImportMsg(`Đã nhập ${added} tài khoản mới (bỏ qua email trùng).`);
+      setImportMsg(`Đã nhập ${added} tài khoản mới (bỏ qua User AD trùng).`);
     } catch (err) {
       setImportMsg("Không đọc được file. Vui lòng dùng file Excel (.xlsx).");
     } finally {
@@ -576,7 +576,7 @@ function AdminAccountsScreen({ roster, defaultPassword, classCode, onAdd, onBulk
           <p className="text-[11px] text-gray-400 mb-3">Sẽ được thêm vào <strong>Lớp {classCode}</strong></p>
           <div className="space-y-2.5">
             <Field placeholder="Họ và tên" value={name} onChange={(e) => setName(e.target.value)} />
-            <Field placeholder="Email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} />
+            <Field placeholder="User AD (vd: tranghh)" type="text" value={username} onChange={(e) => setUsername(e.target.value)} />
             <Field placeholder="Đơn vị / Phòng" value={dept} onChange={(e) => setDept(e.target.value)} />
             {error && <p className="accent-text text-xs">{error}</p>}
             <button onClick={addManual} className="w-full brand-bg text-white font-semibold py-2.5 rounded-xl text-sm">Thêm tài khoản</button>
@@ -586,7 +586,7 @@ function AdminAccountsScreen({ roster, defaultPassword, classCode, onAdd, onBulk
         <Card className="p-4">
           <p className="text-sm font-semibold text-gray-800 mb-1 flex items-center gap-1.5"><Upload size={15} /> Nhập hàng loạt từ Excel</p>
           <p className="text-[11px] text-gray-400 mb-2">Sẽ được thêm vào <strong>Lớp {classCode}</strong></p>
-          <p className="text-xs text-gray-500 mb-3">File cần có các cột: <strong>Họ tên, Email, Đơn vị</strong>.</p>
+          <p className="text-xs text-gray-500 mb-3">File cần có các cột: <strong>Họ tên, User AD, Đơn vị</strong>.</p>
           <input ref={fileRef} type="file" accept=".xlsx,.xls" onChange={handleFile} className="hidden" id="import-file" />
           <label htmlFor="import-file" className="block w-full text-center bg-gray-100 text-gray-700 font-medium py-2.5 rounded-xl text-sm cursor-pointer hover:bg-gray-200">Chọn file Excel</label>
           {importMsg && <p className="text-xs text-gray-500 mt-2">{importMsg}</p>}
@@ -601,7 +601,7 @@ function AdminAccountsScreen({ roster, defaultPassword, classCode, onAdd, onBulk
             <Avatar name={u.name} size={32} />
             <div className="flex-1 min-w-0">
               <p className="text-sm font-medium text-gray-800 truncate">{u.name} {u.locked && <span className="text-[10px] accent-text font-normal">(đã khóa)</span>}</p>
-              <p className="text-[11px] text-gray-400 truncate">{u.email} · {u.dept}</p>
+              <p className="text-[11px] text-gray-400 truncate">{u.username} · {u.dept}</p>
             </div>
             <Pill tone="gray">Lớp {u.classCode}</Pill>
             <button onClick={() => onResetPassword(u.id)} title="Cấp lại mật khẩu mặc định" className="w-8 h-8 rounded-lg bg-gray-50 flex items-center justify-center text-gray-500 brand-hover-text"><KeyRound size={15} /></button>
@@ -662,7 +662,7 @@ function AdminScreen({ entries, roster, classCode }) {
       const u = allStats.find((x) => x.id === e.userId);
       return {
         "Ngày thực hiện": fmtDate(e.timestamp),
-        "Tên": e.userName, "Email": u ? u.email : "", "Đơn vị": e.dept,
+        "Tên": e.userName, "User AD": u ? u.username : "", "Đơn vị": e.dept,
         "Điểm (tổng)": u ? u.points : "", "Số ngày ứng dụng": u ? u.daysLogged : "",
         "Early Bird": (earlyMap[dayKey(e.timestamp)] || []).includes(e.id) ? "Có" : "",
         "Thời gian nhập": new Date(e.timestamp).toLocaleString("vi-VN"),
@@ -686,21 +686,21 @@ function AdminScreen({ entries, roster, classCode }) {
     };
 
     addSheet("Chưa nhập hôm nay", notDoneToday.map((u) => ({
-      "Tên": u.name, "Email": u.email, "Đơn vị": u.dept,
+      "Tên": u.name, "User AD": u.username, "Đơn vị": u.dept,
       "Trạng thái": u.missedDays !== null ? `Bỏ ${u.missedDays} ngày` : "Chưa bắt đầu",
     })), [{ wch: 22 }, { wch: 24 }, { wch: 20 }, { wch: 16 }]);
 
     addSheet("Chưa nhập từ 2 ngày", missing2Days.map((u) => ({
-      "Tên": u.name, "Email": u.email, "Đơn vị": u.dept, "Số ngày bỏ lỡ": u.missedDays,
+      "Tên": u.name, "User AD": u.username, "Đơn vị": u.dept, "Số ngày bỏ lỡ": u.missedDays,
     })), [{ wch: 22 }, { wch: 24 }, { wch: 20 }, { wch: 14 }]);
 
     addSheet("Chưa hoàn thành toàn khóa", notCompletedCourse.map((u) => ({
-      "Tên": u.name, "Email": u.email, "Đơn vị": u.dept,
+      "Tên": u.name, "User AD": u.username, "Đơn vị": u.dept,
       "Số ngày đã làm": `${u.daysLogged}/${PROGRAM_DAYS}`,
     })), [{ wch: 22 }, { wch: 24 }, { wch: 20 }, { wch: 16 }]);
 
     addSheet("Theo dõi cá nhân - Toàn lớp", allStats.map((u, i) => ({
-      "STT": i + 1, "Tên": u.name, "Email": u.email, "Đơn vị": u.dept,
+      "STT": i + 1, "Tên": u.name, "User AD": u.username, "Đơn vị": u.dept,
       "Điểm": u.points, "Số ngày đã làm": u.daysLogged, "Streak hiện tại": u.streak,
     })), [{ wch: 6 }, { wch: 22 }, { wch: 24 }, { wch: 20 }, { wch: 10 }, { wch: 14 }, { wch: 14 }]);
 
@@ -715,7 +715,7 @@ function AdminScreen({ entries, roster, classCode }) {
         <button onClick={() => setSelected(null)} className="text-sm brand-text font-medium mb-4">← Quay lại</button>
         <div className="flex items-center gap-3 mb-4">
           <Avatar name={u.name} size={48} />
-          <div><h1 className="font-bold text-gray-900">{u.name}</h1><p className="text-xs text-gray-400">{u.email} · {u.dept}</p></div>
+          <div><h1 className="font-bold text-gray-900">{u.name}</h1><p className="text-xs text-gray-400">{u.username} · {u.dept}</p></div>
         </div>
         <Card className="p-4 grid grid-cols-3 divide-x divide-gray-100 mb-5">
           <div className="text-center"><p className="text-lg font-bold accent-text">{u.points}</p><p className="text-[11px] text-gray-500">Điểm</p></div>
@@ -1026,23 +1026,23 @@ export default function App() {
   const persistEntries = async (next) => { setEntries(next); try { await storageSet(entriesKey(user.classCode), JSON.stringify(next)); } catch (e) { setSaveError("Lỗi lưu dữ liệu."); } };
   const persistSettings = async (pwd) => { setDefaultPassword(pwd); try { await storageSet(settingsKey(user.classCode), JSON.stringify({ defaultPassword: pwd })); } catch (e) { /* noop */ } };
 
-  // Học viên đăng nhập bằng email — chưa biết trước thuộc lớp nào, nên dò qua từng lớp trong classIndex
-  const attemptLogin = async (email, password) => {
+  // Học viên đăng nhập bằng User AD — chưa biết trước thuộc lớp nào, nên dò qua từng lớp trong classIndex
+  const attemptLogin = async (username, password) => {
     for (const c of classIndex) {
       const r = await storageGet(rosterKey(c)).catch(() => null);
       if (!r) continue;
       const list = JSON.parse(r.value);
-      const acc = list.find((u) => normEmail(u.email) === normEmail(email));
+      const acc = list.find((u) => normUsername(u.username) === normUsername(username));
       if (acc) {
         if (acc.locked) return { error: "Tài khoản đã bị khóa. Vui lòng liên hệ Ban tổ chức." };
-        if (acc.password !== password) return { error: "Email hoặc mật khẩu không đúng." };
+        if (acc.password !== password) return { error: "User AD hoặc mật khẩu không đúng." };
         setUser({ ...acc, isAdmin: false });
         await loadClassData(c);
         setView("home");
         return { ok: true };
       }
     }
-    return { error: "Email hoặc mật khẩu không đúng." };
+    return { error: "User AD hoặc mật khẩu không đúng." };
   };
 
   const handleAdminLogin = async (classCode) => {
@@ -1071,10 +1071,10 @@ export default function App() {
   };
 
   // Admin: account management actions — luôn thao tác trên đúng roster của lớp đang hoạt động
-  const addAccount = ({ name, email, dept }) => persistRoster([...roster, { id: uid(), name, email, dept, classCode: user.classCode, password: defaultPassword, locked: false }]);
+  const addAccount = ({ name, username, dept }) => persistRoster([...roster, { id: uid(), name, username, dept, classCode: user.classCode, password: defaultPassword, locked: false }]);
   const bulkImport = (parsed) => {
-    const existing = new Set(roster.map((u) => normEmail(u.email)));
-    const toAdd = parsed.filter((p) => !existing.has(normEmail(p.email))).map((p) => ({ id: uid(), name: p.name, email: p.email, dept: p.dept, classCode: user.classCode, password: defaultPassword, locked: false }));
+    const existing = new Set(roster.map((u) => normUsername(u.username)));
+    const toAdd = parsed.filter((p) => !existing.has(normUsername(p.username))).map((p) => ({ id: uid(), name: p.name, username: normUsername(p.username), dept: p.dept, classCode: user.classCode, password: defaultPassword, locked: false }));
     persistRoster([...roster, ...toAdd]);
     return toAdd.length;
   };
