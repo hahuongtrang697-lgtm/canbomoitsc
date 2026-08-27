@@ -28,10 +28,11 @@ const CLASS_INDEX_KEY = "classIndex";
 const rosterKey = (c) => `roster_${c}`;
 const entriesKey = (c) => `entries_${c}`;
 const settingsKey = (c) => `settings_${c}`;
-// Lớp gọi window.storage trực tiếp (bản xem trước trong Claude). Khi build cho GitHub/Vercel,
-// 2 dòng này được thay bằng storage.get/set (Firebase) — phần còn lại của app không cần sửa gì.
 const storageGet = (key) => storage.get(key);
 const storageSet = (key, value) => storage.set(key, value);
+// storageUpdate: dùng Firestore Transaction THẬT — Firebase tự đảm bảo không ai ghi đè mất
+// dữ liệu của người khác, dù nhiều người thao tác cùng lúc.
+const storageUpdate = (key, mutatorFn) => storage.update(key, mutatorFn);
 // Màu thương hiệu VietinBank chính thức
 const BLUE = "#005993";       // Vietin Dark Blue
 const RED = "#D71249";        // Vietin Red
@@ -122,7 +123,10 @@ function computeUserStats(userEntries, earlyBirdDayMap) {
     longestStreak = Math.max(longestStreak, curStreak);
     prevDay = d;
   });
-  points += userEntries.length;
+  // Điểm mỗi lượt ứng dụng: bài đầu tiên trong ngày +1, các bài tiếp theo trong cùng ngày chỉ +0.5
+  const byDay = {};
+  userEntries.forEach((e) => { const d = dayKey(e.timestamp); byDay[d] = byDay[d] || []; byDay[d].push(e); });
+  Object.values(byDay).forEach((list) => { points += 1 + (list.length - 1) * 0.5; });
   userEntries.forEach((e) => {
     const d = dayKey(e.timestamp);
     if ((earlyBirdDayMap[d] || []).includes(e.id)) points += 1;
@@ -180,7 +184,7 @@ const EntryDetail = ({ e, size = "sm" }) => {
     <div className="space-y-2">
       <div><p className="text-[11px] font-semibold text-gray-400 uppercase mb-0.5">Bối cảnh</p><p className={textCls}>{e.context}</p></div>
       <div><p className="text-[11px] font-semibold text-gray-400 uppercase mb-0.5">Hành vi thực hiện</p><p className={textCls}>{e.action}</p></div>
-      <div><p className="text-[11px] font-semibold text-gray-400 uppercase mb-0.5">Kết quả thực hiện</p><p className={textCls}>{e.result}</p></div>
+      <div><p className="text-[11px] font-semibold text-gray-400 uppercase mb-0.5">Kết quả đạt được</p><p className={textCls}>{e.result}</p></div>
     </div>
   );
 };
@@ -282,6 +286,7 @@ function AddEntryScreen({ onSave, onClose }) {
   const [action, setAction] = useState("");
   const [result, setResult] = useState("");
   const [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
   const items = CATEGORY_GROUPS.find((g) => g.group === group)?.items || [];
 
   return (
@@ -301,24 +306,27 @@ function AddEntryScreen({ onSave, onClose }) {
         </select>
 
         <label className="text-xs font-medium text-gray-500 mb-1 block">Bối cảnh</label>
-        <textarea value={context} onChange={(e) => setContext(e.target.value)} placeholder='VD: "Khách hàng phàn nàn hồ sơ vay bị chậm xử lý."'
+        <textarea value={context} onChange={(e) => setContext(e.target.value)}
           rows={2} className="w-full border border-gray-200 rounded-xl px-3.5 py-3 text-[15px] mb-3 outline-none brand-focus-border resize-none" />
 
         <label className="text-xs font-medium text-gray-500 mb-1 block">Hành vi thực hiện</label>
-        <textarea value={action} onChange={(e) => setAction(e.target.value)} placeholder='VD: "Tôi chủ động gọi điện trước cho khách hàng để giải thích và cập nhật tiến độ."'
+        <textarea value={action} onChange={(e) => setAction(e.target.value)}
           rows={2} className="w-full border border-gray-200 rounded-xl px-3.5 py-3 text-[15px] mb-3 outline-none brand-focus-border resize-none" />
 
-        <label className="text-xs font-medium text-gray-500 mb-1 block">Kết quả thực hiện</label>
-        <textarea value={result} onChange={(e) => setResult(e.target.value)} placeholder='VD: "Khách hàng yên tâm hơn, không còn phàn nàn, hồ sơ hoàn tất đúng hẹn."'
+        <label className="text-xs font-medium text-gray-500 mb-1 block">Kết quả đạt được</label>
+        <textarea value={result} onChange={(e) => setResult(e.target.value)}
           rows={2} className="w-full border border-gray-200 rounded-xl px-3.5 py-3 text-[15px] outline-none brand-focus-border resize-none" />
 
         {error && <p className="accent-text text-xs mt-2">{error}</p>}
         <button
-          onClick={() => {
-            if (!context.trim() || !action.trim() || !result.trim()) { setError("Vui lòng nhập đầy đủ cả 3 mục: Bối cảnh, Hành vi thực hiện, Kết quả thực hiện."); return; }
-            onSave({ group, item, context: context.trim(), action: action.trim(), result: result.trim() });
+          disabled={saving}
+          onClick={async () => {
+            if (saving) return;
+            if (!context.trim() || !action.trim() || !result.trim()) { setError("Vui lòng nhập đầy đủ cả 3 mục: Bối cảnh, Hành vi thực hiện, Kết quả đạt được."); return; }
+            setSaving(true);
+            await onSave({ group, item, context: context.trim(), action: action.trim(), result: result.trim() });
           }}
-          className="w-full brand-bg text-white font-semibold py-3.5 rounded-xl mt-4 active:scale-[0.98] transition">Lưu</button>
+          className="w-full brand-bg text-white font-semibold py-3.5 rounded-xl mt-4 active:scale-[0.98] transition disabled:opacity-60">{saving ? "Đang lưu..." : "Lưu"}</button>
       </div>
     </div>
   );
@@ -547,7 +555,7 @@ function AdminAccountsScreen({ roster, defaultPassword, classCode, onAdd, onBulk
         dept: pick(row, ["đơn vị", "don vi", "dept", "phòng", "chi nhánh"]),
       })).filter((r) => r.username && r.name);
       if (parsed.length === 0) { setImportMsg("Không tìm thấy dữ liệu hợp lệ. Cần cột: Họ tên, User AD, Đơn vị."); return; }
-      const added = onBulkImport(parsed);
+      const added = await onBulkImport(parsed);
       setImportMsg(`Đã nhập ${added} tài khoản mới (bỏ qua User AD trùng).`);
     } catch (err) {
       setImportMsg("Không đọc được file. Vui lòng dùng file Excel (.xlsx).");
@@ -630,8 +638,9 @@ function AdminAccountsScreen({ roster, defaultPassword, classCode, onAdd, onBulk
 }
 
 // ---------- Admin: Dashboard ----------
-function AdminScreen({ entries, roster, classCode }) {
+function AdminScreen({ entries, roster, classCode, onDeleteEntry }) {
   const [selected, setSelected] = useState(null);
+  const [confirmDeleteId, setConfirmDeleteId] = useState(null);
   const earlyMap = useMemo(() => earlyBirdMapForDay(entries), [entries]);
   const allStats = useMemo(() => {
     const byUser = {};
@@ -653,6 +662,7 @@ function AdminScreen({ entries, roster, classCode }) {
     .sort((a, b) => b.missedDays - a.missedDays);
   const courseCompletedCount = allStats.filter((u) => u.daysLogged >= COMPLETION_THRESHOLD).length;
   const courseCompletionRate = roster.length ? Math.round((courseCompletedCount / roster.length) * 100) : 0;
+  const todaysEarlyBird = useMemo(() => (earlyMap[todayKey()] || []).map((id) => entries.find((e) => e.id === id)).filter(Boolean), [earlyMap, entries]);
   const notCompletedCourse = allStats
     .filter((u) => u.daysLogged < COMPLETION_THRESHOLD)
     .sort((a, b) => a.daysLogged - b.daysLogged);
@@ -667,7 +677,7 @@ function AdminScreen({ entries, roster, classCode }) {
         "Early Bird": (earlyMap[dayKey(e.timestamp)] || []).includes(e.id) ? "Có" : "",
         "Thời gian nhập": new Date(e.timestamp).toLocaleString("vi-VN"),
         "Danh mục": e.group,
-        "Bối cảnh": e.context, "Hành vi thực hiện": e.action, "Kết quả thực hiện": e.result,
+        "Bối cảnh": e.context, "Hành vi thực hiện": e.action, "Kết quả đạt được": e.result,
       };
     });
     const ws = XLSX.utils.json_to_sheet(rows);
@@ -712,7 +722,7 @@ function AdminScreen({ entries, roster, classCode }) {
     const u = allStats.find((x) => x.id === selected);
     return (
       <div className="max-w-3xl mx-auto px-5 md:px-8 pt-6 pb-24 md:pb-8">
-        <button onClick={() => setSelected(null)} className="text-sm brand-text font-medium mb-4">← Quay lại</button>
+        <button onClick={() => { setSelected(null); setConfirmDeleteId(null); }} className="text-sm brand-text font-medium mb-4">← Quay lại</button>
         <div className="flex items-center gap-3 mb-4">
           <Avatar name={u.name} size={48} />
           <div><h1 className="font-bold text-gray-900">{u.name}</h1><p className="text-xs text-gray-400">{u.username} · {u.dept}</p></div>
@@ -726,7 +736,22 @@ function AdminScreen({ entries, roster, classCode }) {
         <div className="space-y-2.5">
           {u.list.slice().reverse().map((e) => (
             <Card key={e.id} className="p-3.5">
-              <p className="text-xs text-gray-400 mb-1">{fmtDate(e.timestamp)} {fmtTime(e.timestamp)} · {e.item}</p>
+              <div className="flex items-center justify-between gap-2 mb-1">
+                <p className="text-xs text-gray-400">{fmtDate(e.timestamp)} {fmtTime(e.timestamp)} · {e.item}</p>
+                {confirmDeleteId === e.id ? (
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <span className="text-[11px] accent-text font-medium">Xóa?</span>
+                    <button onClick={() => { onDeleteEntry(e.id); setConfirmDeleteId(null); }} className="text-[11px] font-semibold accent-bg text-white px-2 py-1 rounded-md">Có</button>
+                    <button onClick={() => setConfirmDeleteId(null)} className="text-[11px] font-semibold bg-gray-100 text-gray-600 px-2 py-1 rounded-md">Không</button>
+                  </div>
+                ) : (
+                  <button
+                    onClick={() => setConfirmDeleteId(e.id)}
+                    title="Xóa bài ứng dụng này"
+                    className="w-7 h-7 shrink-0 rounded-lg bg-gray-50 flex items-center justify-center text-gray-400 accent-hover-text"
+                  ><Trash2 size={14} /></button>
+                )}
+              </div>
               <EntryDetail e={e} />
             </Card>
           ))}
@@ -758,6 +783,24 @@ function AdminScreen({ entries, roster, classCode }) {
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-5">
         <Card className="p-4"><p className="text-2xl font-bold accent-text">{missing2Days.length}</p><p className="text-xs text-gray-500 mt-1">Học viên chưa nhập từ 2 ngày trở lên</p></Card>
         <Card className="p-4"><p className="text-2xl font-bold brand-text">{courseCompletionRate}%</p><p className="text-xs text-gray-500 mt-1">Tỷ lệ hoàn thành toàn khóa ({courseCompletedCount}/{roster.length} người đạt ≥ {COMPLETION_THRESHOLD}/{PROGRAM_DAYS} ngày)</p></Card>
+      </div>
+
+      <div className="mb-5">
+        <h3 className="font-semibold text-sm text-gray-900 mb-2 flex items-center gap-1.5"><Sunrise size={15} className="text-amber-500" /> Top 5 Early Bird hôm nay</h3>
+        <Card className="p-3 max-w-md">
+          {todaysEarlyBird.length === 0 ? <p className="text-sm text-gray-400 py-1 text-center">Chưa có ai ứng dụng hôm nay.</p> : (
+            <div className="space-y-2.5">
+              {todaysEarlyBird.map((e, i) => (
+                <div key={e.id} className="flex items-center gap-3">
+                  <span className="text-lg w-6">{["🥇", "🥈", "🥉", "4️⃣", "5️⃣"][i]}</span>
+                  <Avatar name={e.userName} size={30} />
+                  <span className="flex-1 text-sm font-medium text-gray-800 truncate">{e.userName}</span>
+                  <span className="text-xs text-gray-400 whitespace-nowrap">{fmtTime(e.timestamp)}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </Card>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-5">
@@ -997,12 +1040,18 @@ export default function App() {
   }, []);
   useEffect(() => { loadClassIndex(); }, [loadClassIndex]);
 
-  const registerClass = async (classCode, currentIndex) => {
-    if (currentIndex.includes(classCode)) return currentIndex;
-    const next = [...currentIndex, classCode];
-    setClassIndex(next);
-    try { await storageSet(CLASS_INDEX_KEY, JSON.stringify(next)); } catch (e) { /* noop */ }
-    return next;
+  const registerClass = async (classCode) => {
+    try {
+      const next = await storageUpdate(CLASS_INDEX_KEY, (current) => {
+        const list = current || [];
+        return list.includes(classCode) ? list : [...list, classCode];
+      });
+      setClassIndex(next);
+      return next;
+    } catch (e) {
+      setSaveError("Lỗi đăng ký lớp mới.");
+      return classIndex;
+    }
   };
 
   // Tải riêng dữ liệu (roster/entries/settings) của 1 lớp cụ thể
@@ -1022,8 +1071,23 @@ export default function App() {
     }
   }, []);
 
-  const persistRoster = async (next) => { setRoster(next); try { await storageSet(rosterKey(user.classCode), JSON.stringify(next)); } catch (e) { setSaveError("Lỗi lưu danh sách."); } };
-  const persistEntries = async (next) => { setEntries(next); try { await storageSet(entriesKey(user.classCode), JSON.stringify(next)); } catch (e) { setSaveError("Lỗi lưu dữ liệu."); } };
+  // persistRoster/persistEntries giờ nhận HÀM MÔ TẢ CÁCH SỬA (không phải mảng đã tính sẵn) —
+  // storageUpdate sẽ tự lấy đúng dữ liệu MỚI NHẤT trên máy chủ ngay tại thời điểm ghi rồi mới áp
+  // dụng thay đổi, nên dù có người khác vừa ghi thêm gì đó ngay trước đó cũng không bị mất.
+  const persistRoster = async (mutatorFn) => {
+    try {
+      const next = await storageUpdate(rosterKey(user.classCode), (current) => mutatorFn(current || []));
+      setRoster(next);
+      return next;
+    } catch (e) { setSaveError("Lỗi lưu danh sách."); }
+  };
+  const persistEntries = async (mutatorFn) => {
+    try {
+      const next = await storageUpdate(entriesKey(user.classCode), (current) => mutatorFn(current || []));
+      setEntries(next);
+      return next;
+    } catch (e) { setSaveError("Lỗi lưu dữ liệu."); }
+  };
   const persistSettings = async (pwd) => { setDefaultPassword(pwd); try { await storageSet(settingsKey(user.classCode), JSON.stringify({ defaultPassword: pwd })); } catch (e) { /* noop */ } };
 
   // Học viên đăng nhập bằng User AD — chưa biết trước thuộc lớp nào, nên dò qua từng lớp trong classIndex
@@ -1048,45 +1112,55 @@ export default function App() {
   const handleAdminLogin = async (classCode) => {
     setUser({ id: "admin", name: "Ban tổ chức", isAdmin: true, classCode });
     setView("admin");
-    await registerClass(classCode, classIndex);
+    await registerClass(classCode);
     await loadClassData(classCode);
   };
   const switchAdminClass = async (classCode) => {
     setUser((u) => ({ ...u, classCode }));
-    await registerClass(classCode, classIndex);
+    await registerClass(classCode);
     await loadClassData(classCode);
   };
 
-  const handleSaveEntry = ({ group, item, context, action, result }) => {
+  const handleSaveEntry = async ({ group, item, context, action, result }) => {
     const entry = { id: uid(), userId: user.id, userName: user.name, dept: user.dept, classCode: user.classCode, group, item, context, action, result, timestamp: Date.now(), likes: [] };
-    persistEntries([...entries, entry]);
+    await persistEntries((current) => [...current, entry]);
     setShowAdd(false);
   };
   const handleLike = (entryId) => {
-    persistEntries(entries.map((e) => {
+    persistEntries((current) => current.map((e) => {
       if (e.id !== entryId) return e;
       const has = (e.likes || []).includes(user.id);
       return { ...e, likes: has ? e.likes.filter((id) => id !== user.id) : [...(e.likes || []), user.id] };
     }));
   };
+  // Ban tổ chức xóa 1 bài ứng dụng — điểm/streak/bảng xếp hạng tự tính lại ngay vì đều tính động từ entries
+  const deleteEntry = (entryId) => persistEntries((current) => current.filter((e) => e.id !== entryId));
 
   // Admin: account management actions — luôn thao tác trên đúng roster của lớp đang hoạt động
-  const addAccount = ({ name, username, dept }) => persistRoster([...roster, { id: uid(), name, username, dept, classCode: user.classCode, password: defaultPassword, locked: false }]);
-  const bulkImport = (parsed) => {
-    const existing = new Set(roster.map((u) => normUsername(u.username)));
-    const toAdd = parsed.filter((p) => !existing.has(normUsername(p.username))).map((p) => ({ id: uid(), name: p.name, username: normUsername(p.username), dept: p.dept, classCode: user.classCode, password: defaultPassword, locked: false }));
-    persistRoster([...roster, ...toAdd]);
-    return toAdd.length;
+  const addAccount = ({ name, username, dept }) => persistRoster((current) => {
+    if (current.some((u) => normUsername(u.username) === normUsername(username))) return current; // trùng User AD, bỏ qua
+    return [...current, { id: uid(), name, username, dept, classCode: user.classCode, password: defaultPassword, locked: false }];
+  });
+  const bulkImport = async (parsed) => {
+    let addedCount = 0;
+    await persistRoster((current) => {
+      const existing = new Set(current.map((u) => normUsername(u.username)));
+      const toAdd = parsed.filter((p) => !existing.has(normUsername(p.username))).map((p) => ({ id: uid(), name: p.name, username: normUsername(p.username), dept: p.dept, classCode: user.classCode, password: defaultPassword, locked: false }));
+      addedCount = toAdd.length;
+      return [...current, ...toAdd];
+    });
+    return addedCount;
   };
-  const toggleLock = (id) => persistRoster(roster.map((u) => (u.id === id ? { ...u, locked: !u.locked } : u)));
-  const resetPassword = (id) => persistRoster(roster.map((u) => (u.id === id ? { ...u, password: defaultPassword } : u)));
-  const deleteAccount = (id) => persistRoster(roster.filter((u) => u.id !== id));
+  const toggleLock = (id) => persistRoster((current) => current.map((u) => (u.id === id ? { ...u, locked: !u.locked } : u)));
+  const resetPassword = (id) => persistRoster((current) => current.map((u) => (u.id === id ? { ...u, password: defaultPassword } : u)));
+  const deleteAccount = (id) => persistRoster((current) => current.filter((u) => u.id !== id));
   const deleteClassData = async () => {
-    await persistRoster([]);
-    await persistEntries([]);
-    const next = classIndex.filter((c) => c !== user.classCode);
-    setClassIndex(next);
-    try { await storageSet(CLASS_INDEX_KEY, JSON.stringify(next)); } catch (e) { /* noop */ }
+    await persistRoster(() => []);
+    await persistEntries(() => []);
+    try {
+      const next = await storageUpdate(CLASS_INDEX_KEY, (current) => (current || []).filter((c) => c !== user.classCode));
+      setClassIndex(next);
+    } catch (e) { setSaveError("Lỗi xóa mã lớp khỏi danh sách."); }
   };
 
 
@@ -1130,7 +1204,7 @@ export default function App() {
 
         {user.isAdmin ? (
           <>
-            {view === "admin" && <AdminScreen entries={entries} roster={roster} classCode={user.classCode} />}
+            {view === "admin" && <AdminScreen entries={entries} roster={roster} classCode={user.classCode} onDeleteEntry={deleteEntry} />}
             {view === "accounts" && (
               <AdminAccountsScreen
                 roster={roster} defaultPassword={defaultPassword} classCode={user.classCode}

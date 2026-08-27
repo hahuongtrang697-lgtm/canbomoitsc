@@ -1,5 +1,5 @@
 import { initializeApp } from "firebase/app";
-import { getFirestore, doc, getDoc, setDoc } from "firebase/firestore";
+import { getFirestore, doc, getDoc, setDoc, runTransaction } from "firebase/firestore";
 
 // 🔧 Firebase config của BẢN 2 (project: canbomoitscv2) — tách biệt hoàn toàn với bản 1
 const firebaseConfig = {
@@ -25,5 +25,20 @@ export const storage = {
   async set(key, value) {
     await setDoc(doc(db, "appdata", key), { value });
     return { key, value };
+  },
+  // update: đọc + sửa + ghi trong 1 GIAO DỊCH AN TOÀN (Firestore Transaction) thật sự.
+  // Nếu 2 người cùng ghi vào đúng 1 tài liệu ở cùng 1 thời điểm, Firebase tự phát hiện xung đột,
+  // âm thầm chạy lại giao dịch của người đến sau bằng đúng dữ liệu mới nhất — đảm bảo không ai
+  // bị mất dữ liệu do bị ghi đè, dù bao nhiêu người thao tác cùng lúc.
+  async update(key, mutatorFn) {
+    const ref = doc(db, "appdata", key);
+    const result = await runTransaction(db, async (tx) => {
+      const snap = await tx.get(ref);
+      const current = snap.exists() ? JSON.parse(snap.data().value) : null;
+      const next = mutatorFn(current);
+      tx.set(ref, { value: JSON.stringify(next) });
+      return next;
+    });
+    return result;
   },
 };
