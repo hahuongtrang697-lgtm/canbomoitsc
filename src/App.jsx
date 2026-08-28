@@ -363,7 +363,14 @@ function AddEntryScreen({ onSave, onClose }) {
             if (saving) return;
             if (!context.trim() || !action.trim() || !result.trim()) { setError("Vui lòng nhập đầy đủ cả 3 mục: Bối cảnh, Hành vi thực hiện, Kết quả đạt được."); return; }
             setSaving(true);
-            await onSave({ group, item, context: context.trim(), action: action.trim(), result: result.trim() });
+            setError("");
+            try {
+              await onSave({ group, item, context: context.trim(), action: action.trim(), result: result.trim() });
+              // Thành công: onSave (App) đã tự đóng form. Nếu vì lý do gì form vẫn còn mở tới đây, không làm gì thêm.
+            } catch (err) {
+              setError("Lưu thất bại (có thể do mất mạng). Bài viết CHƯA được ghi nhận — vui lòng bấm Lưu lại.");
+              setSaving(false);
+            }
           }}
           className="w-full brand-bg text-white font-semibold py-3.5 rounded-xl mt-4 active:scale-[0.98] transition disabled:opacity-60">{saving ? "Đang lưu..." : "Lưu"}</button>
       </div>
@@ -571,11 +578,15 @@ function AdminAccountsScreen({ roster, defaultPassword, classStartDate, classCod
   const [importMsg, setImportMsg] = useState("");
   const fileRef = useRef(null);
 
-  const addManual = () => {
+  const addManual = async () => {
     if (!name.trim() || !username.trim()) { setError("Vui lòng nhập họ tên và User AD."); return; }
     if (roster.some((u) => normUsername(u.username) === normUsername(username))) { setError("User AD này đã tồn tại."); return; }
-    onAdd({ name: name.trim(), username: normUsername(username), dept: dept.trim() });
-    setName(""); setUsername(""); setDept(""); setError("");
+    try {
+      await onAdd({ name: name.trim(), username: normUsername(username), dept: dept.trim() });
+      setName(""); setUsername(""); setDept(""); setError("");
+    } catch (err) {
+      setError("Lưu thất bại (có thể do mất mạng). Vui lòng thử lại.");
+    }
   };
 
   const handleFile = async (e) => {
@@ -1151,14 +1162,20 @@ export default function App() {
       const next = await storageUpdate(rosterKey(user.classCode), (current) => mutatorFn(current || []));
       setRoster(next);
       return next;
-    } catch (e) { setSaveError("Lỗi lưu danh sách."); }
+    } catch (e) {
+      setSaveError("Lỗi lưu danh sách.");
+      throw e;
+    }
   };
   const persistEntries = async (mutatorFn) => {
     try {
       const next = await storageUpdate(entriesKey(user.classCode), (current) => mutatorFn(current || []));
       setEntries(next);
       return next;
-    } catch (e) { setSaveError("Lỗi lưu dữ liệu."); }
+    } catch (e) {
+      setSaveError("Lỗi lưu dữ liệu.");
+      throw e; // ném lỗi ra ngoài để nơi gọi (VD: form thêm bài) biết mà KHÔNG đóng form/coi như thành công
+    }
   };
   const persistSettings = async (pwd) => { setDefaultPassword(pwd); try { await storageSet(settingsKey(user.classCode), JSON.stringify({ defaultPassword: pwd, classStartDate })); } catch (e) { /* noop */ } };
   const persistClassStartDate = async (dateStr) => { setClassStartDate(dateStr); try { await storageSet(settingsKey(user.classCode), JSON.stringify({ defaultPassword, classStartDate: dateStr })); } catch (e) { /* noop */ } };
