@@ -571,6 +571,7 @@ function AdminAccountsScreen({ roster, defaultPassword, classStartDate, classCod
   const [dept, setDept] = useState("");
   const [error, setError] = useState("");
   const [importMsg, setImportMsg] = useState("");
+  const [actionError, setActionError] = useState("");
   const fileRef = useRef(null);
 
   const addManual = async () => {
@@ -667,12 +668,14 @@ function AdminAccountsScreen({ roster, defaultPassword, classStartDate, classCod
               <p className="text-[11px] text-gray-400 truncate">{u.username} · {u.dept}</p>
             </div>
             <Pill tone="gray">Lớp {u.classCode}</Pill>
-            <button onClick={() => onResetPassword(u.id)} title="Cấp lại mật khẩu mặc định" className="w-8 h-8 rounded-lg bg-gray-50 flex items-center justify-center text-gray-500 brand-hover-text"><KeyRound size={15} /></button>
-            <button onClick={() => onToggleLock(u.id)} title={u.locked ? "Mở khóa" : "Khóa tài khoản"} className={`w-8 h-8 rounded-lg flex items-center justify-center ${u.locked ? "bg-red-50 accent-text" : "bg-gray-50 text-gray-500 accent-hover-text"}`}><Ban size={15} /></button>
-            <button onClick={() => onDelete(u.id)} title="Xóa tài khoản" className="w-8 h-8 rounded-lg bg-gray-50 flex items-center justify-center text-gray-500 accent-hover-text"><Trash2 size={15} /></button>
+            <button onClick={() => onResetPassword(u.id).catch(() => setActionError("Không thực hiện được (mất mạng?). Vui lòng thử lại."))} title="Cấp lại mật khẩu mặc định" className="w-8 h-8 rounded-lg bg-gray-50 flex items-center justify-center text-gray-500 brand-hover-text"><KeyRound size={15} /></button>
+            <button onClick={() => onToggleLock(u.id).catch(() => setActionError("Không thực hiện được (mất mạng?). Vui lòng thử lại."))} title={u.locked ? "Mở khóa" : "Khóa tài khoản"} className={`w-8 h-8 rounded-lg flex items-center justify-center ${u.locked ? "bg-red-50 accent-text" : "bg-gray-50 text-gray-500 accent-hover-text"}`}><Ban size={15} /></button>
+            <button onClick={() => onDelete(u.id).catch(() => setActionError("Không thực hiện được (mất mạng?). Vui lòng thử lại."))} title="Xóa tài khoản" className="w-8 h-8 rounded-lg bg-gray-50 flex items-center justify-center text-gray-500 accent-hover-text"><Trash2 size={15} /></button>
           </Card>
         ))}
       </div>
+
+      {actionError && <p className="accent-text text-xs mt-3">{actionError}</p>}
 
       <div className="mt-8 pt-5 border-t border-gray-100">
         <p className="text-sm font-semibold accent-text mb-1">⚠️ Vùng nguy hiểm</p>
@@ -680,7 +683,7 @@ function AdminAccountsScreen({ roster, defaultPassword, classStartDate, classCod
         <div className="flex flex-col sm:flex-row gap-2 max-w-lg">
           <Field value={confirmText} onChange={(e) => setConfirmText(e.target.value)} placeholder={`Gõ "${classCode}" để xác nhận`} />
           <button
-            onClick={() => { if (confirmText.trim() === classCode) { onDeleteClass(); setConfirmText(""); } }}
+            onClick={() => { if (confirmText.trim() === classCode) { onDeleteClass().then(() => setConfirmText("")).catch(() => setActionError("Xóa lớp thất bại (mất mạng?). Vui lòng thử lại.")); } }}
             disabled={confirmText.trim() !== classCode}
             className="accent-bg text-white font-semibold px-4 py-3 rounded-xl text-sm whitespace-nowrap disabled:opacity-40 disabled:cursor-not-allowed"
           >
@@ -696,6 +699,7 @@ function AdminAccountsScreen({ roster, defaultPassword, classStartDate, classCod
 function AdminScreen({ entries, scoredEntries, roster, classCode, classStartDate, onDeleteEntry }) {
   const [selected, setSelected] = useState(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState(null);
+  const [deleteEntryError, setDeleteEntryError] = useState("");
   // earlyMap/điểm/streak/ngày làm đều tính trên scoredEntries (đã lọc theo Ngày bắt đầu lớp)
   const earlyMap = useMemo(() => earlyBirdMapForDay(scoredEntries), [scoredEntries]);
   const allStats = useMemo(() => {
@@ -806,6 +810,7 @@ function AdminScreen({ entries, scoredEntries, roster, classCode, classStartDate
           <div className="text-center"><p className="text-lg font-bold">{u.streak}🔥</p><p className="text-[11px] text-gray-500">Streak</p></div>
         </Card>
         <h3 className="font-semibold text-sm text-gray-900 mb-2">Lịch sử &amp; minh chứng</h3>
+        {deleteEntryError && <p className="text-xs accent-text mb-2">{deleteEntryError}</p>}
         <div className="space-y-2.5">
           {u.list.slice().reverse().map((e) => (
             <Card key={e.id} className="p-3.5">
@@ -814,7 +819,7 @@ function AdminScreen({ entries, scoredEntries, roster, classCode, classStartDate
                 {confirmDeleteId === e.id ? (
                   <div className="flex items-center gap-1.5 shrink-0">
                     <span className="text-[11px] accent-text font-medium">Xóa?</span>
-                    <button onClick={() => { onDeleteEntry(e.id); setConfirmDeleteId(null); }} className="text-[11px] font-semibold accent-bg text-white px-2 py-1 rounded-md">Có</button>
+                    <button onClick={() => { setDeleteEntryError(""); onDeleteEntry(e.id).then(() => setConfirmDeleteId(null)).catch(() => setDeleteEntryError("Xóa thất bại (mất mạng?). Vui lòng thử lại.")); }} className="text-[11px] font-semibold accent-bg text-white px-2 py-1 rounded-md">Có</button>
                     <button onClick={() => setConfirmDeleteId(null)} className="text-[11px] font-semibold bg-gray-100 text-gray-600 px-2 py-1 rounded-md">Không</button>
                   </div>
                 ) : (
@@ -1183,21 +1188,27 @@ export default function App() {
 
   // Học viên đăng nhập bằng User AD — chưa biết trước thuộc lớp nào, nên dò qua từng lớp trong classIndex
   const attemptLogin = async (username, password) => {
-    for (const c of classIndex) {
-      const r = await storageGet(rosterKey(c)).catch(() => null);
-      if (!r) continue;
-      const list = JSON.parse(r.value);
-      const acc = list.find((u) => normUsername(u.username) === normUsername(username));
-      if (acc) {
-        if (acc.locked) return { error: "Tài khoản đã bị khóa. Vui lòng liên hệ Ban tổ chức." };
-        if (acc.password !== password) return { error: "User AD hoặc mật khẩu không đúng." };
-        setUser({ ...acc, isAdmin: false });
-        await loadClassData(c);
-        setView("home");
-        return { ok: true };
+    try {
+      for (const c of classIndex) {
+        // KHÔNG dùng .catch(() => null) — nếu đọc lỗi thật (mất mạng...), phải báo lỗi rõ,
+        // không được âm thầm bỏ qua lớp đó rồi báo nhầm "sai mật khẩu".
+        const r = await storageGet(rosterKey(c));
+        if (!r) continue;
+        const list = JSON.parse(r.value);
+        const acc = list.find((u) => normUsername(u.username) === normUsername(username));
+        if (acc) {
+          if (acc.locked) return { error: "Tài khoản đã bị khóa. Vui lòng liên hệ Ban tổ chức." };
+          if (acc.password !== password) return { error: "User AD hoặc mật khẩu không đúng." };
+          setUser({ ...acc, isAdmin: false });
+          await loadClassData(c);
+          setView("home");
+          return { ok: true };
+        }
       }
+      return { error: "User AD hoặc mật khẩu không đúng." };
+    } catch (err) {
+      return { error: "Không kết nối được (có thể do mất mạng). Vui lòng thử đăng nhập lại." };
     }
-    return { error: "User AD hoặc mật khẩu không đúng." };
   };
 
   const handleAdminLogin = async (classCode) => {
