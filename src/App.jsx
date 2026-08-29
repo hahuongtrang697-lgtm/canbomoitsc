@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import * as XLSX from "xlsx";
 import {
-  Flame, Trophy, Plus, Clock, BarChart3, LogOut, Heart, Download, X, ChevronRight,
+  Flame, Trophy, Plus, Clock, BarChart3, LogOut, Download, X, ChevronRight,
   Sunrise, AlertCircle, Check, User, Lock, Upload, UserPlus, KeyRound, Ban, Trash2,
   Menu, LayoutDashboard, Users2, Home as HomeIcon, List, Building2,
 } from "lucide-react";
@@ -379,7 +379,7 @@ function AddEntryScreen({ onSave, onClose }) {
 }
 
 // ---------- Home ----------
-function HomeScreen({ user, entries, roster, onOpenAdd, onLike }) {
+function HomeScreen({ user, entries, roster, onOpenAdd }) {
   const myEntries = useMemo(() => entries.filter((e) => e.userId === user.id).sort((a, b) => a.timestamp - b.timestamp), [entries, user.id]);
   const earlyMap = useMemo(() => earlyBirdMapForDay(entries), [entries]);
   const myStats = useMemo(() => computeUserStats(myEntries, earlyMap), [myEntries, earlyMap]);
@@ -464,11 +464,6 @@ function HomeScreen({ user, entries, roster, onOpenAdd, onLike }) {
                     <Pill tone="blue">{e.item.replace(/^Thói quen \d: /, "")}</Pill>
                   </div>
                   <EntryDetail e={e} />
-                  <div className="flex items-center gap-4 mt-2.5 pt-2.5 border-t border-gray-50">
-                    <button onClick={() => onLike(e.id)} className="flex items-center gap-1 text-xs text-gray-400 accent-hover-text">
-                      <Heart size={14} className={(e.likes || []).includes(user.id) ? "accent-fill accent-text" : ""} /> {(e.likes || []).length}
-                    </button>
-                  </div>
                 </Card>
               ))}
             </div>
@@ -1104,6 +1099,7 @@ export default function App() {
   const [showAdd, setShowAdd] = useState(false);
   const [loaded, setLoaded] = useState(false); // đã tải xong classIndex (đủ để hiện màn đăng nhập)
   const [classDataLoaded, setClassDataLoaded] = useState(false); // đã tải xong dữ liệu của lớp đang hoạt động
+  const [classLoadError, setClassLoadError] = useState(""); // lỗi khi tải dữ liệu lớp (VD: mất mạng) — khác với "chưa có dữ liệu"
   // scoredEntries: chỉ gồm bài từ "Ngày bắt đầu lớp" trở đi — dùng cho MỌI tính điểm/dashboard/xếp hạng.
   // entries (đầy đủ, không lọc) vẫn giữ để hiện Lịch sử cá nhân và xuất Excel chi tiết.
   const scoredEntries = useMemo(() => filterByStartDate(entries, classStartDate), [entries, classStartDate]);
@@ -1139,18 +1135,23 @@ export default function App() {
   // Tải riêng dữ liệu (roster/entries/settings) của 1 lớp cụ thể
   const loadClassData = useCallback(async (classCode) => {
     setClassDataLoaded(false);
+    setClassLoadError("");
     try {
-      const r = await storageGet(rosterKey(classCode)).catch(() => null);
-      const e = await storageGet(entriesKey(classCode)).catch(() => null);
-      const s = await storageGet(settingsKey(classCode)).catch(() => null);
+      // KHÔNG dùng .catch(() => null) ở đây nữa — nếu đọc lỗi thật (mất mạng...), phải BÁO LỖI RÕ,
+      // chứ không được âm thầm coi như "không có dữ liệu" rồi hiện trống trơn (trông như mất bài).
+      const [r, e, s] = await Promise.all([
+        storageGet(rosterKey(classCode)),
+        storageGet(entriesKey(classCode)),
+        storageGet(settingsKey(classCode)),
+      ]);
       setRoster(r ? JSON.parse(r.value) : []);
       setEntries(e ? JSON.parse(e.value) : []);
       setDefaultPassword(s ? (JSON.parse(s.value).defaultPassword || "123456") : "123456");
       setClassStartDate(s ? (JSON.parse(s.value).classStartDate || "") : "");
-    } catch (err) {
-      setSaveError("Không thể tải dữ liệu lớp. Vui lòng thử lại.");
-    } finally {
       setClassDataLoaded(true);
+    } catch (err) {
+      setClassLoadError("Không tải được dữ liệu (có thể do mất mạng). Dữ liệu của bạn vẫn an toàn trên hệ thống — chỉ là chưa tải lên được. Vui lòng bấm Thử lại.");
+      // Cố tình KHÔNG setClassDataLoaded(true) ở đây — tránh hiện app với dữ liệu rỗng/sai như thể mất bài.
     }
   }, []);
 
@@ -1212,16 +1213,9 @@ export default function App() {
   };
 
   const handleSaveEntry = async ({ group, item, context, action, result }) => {
-    const entry = { id: uid(), userId: user.id, userName: user.name, dept: user.dept, classCode: user.classCode, group, item, context, action, result, timestamp: Date.now(), likes: [] };
+    const entry = { id: uid(), userId: user.id, userName: user.name, dept: user.dept, classCode: user.classCode, group, item, context, action, result, timestamp: Date.now() };
     await persistEntries((current) => [...current, entry]);
     setShowAdd(false);
-  };
-  const handleLike = (entryId) => {
-    persistEntries((current) => current.map((e) => {
-      if (e.id !== entryId) return e;
-      const has = (e.likes || []).includes(user.id);
-      return { ...e, likes: has ? e.likes.filter((id) => id !== user.id) : [...(e.likes || []), user.id] };
-    }));
   };
   // Ban tổ chức xóa 1 bài ứng dụng — điểm/streak/bảng xếp hạng tự tính lại ngay vì đều tính động từ entries
   const deleteEntry = (entryId) => persistEntries((current) => current.filter((e) => e.id !== entryId));
@@ -1271,6 +1265,20 @@ export default function App() {
     );
   }
   if (!classDataLoaded) {
+    if (classLoadError) {
+      return (
+        <>
+          <BrandStyles />
+          <div className="min-h-screen flex items-center justify-center bg-white px-6">
+            <div className="max-w-sm text-center">
+              <div className="w-14 h-14 rounded-2xl bg-red-50 flex items-center justify-center mx-auto mb-4"><AlertCircle size={26} className="accent-text" /></div>
+              <p className="text-sm text-gray-700 mb-4">{classLoadError}</p>
+              <button onClick={() => loadClassData(user.classCode)} className="brand-bg text-white font-semibold px-5 py-2.5 rounded-xl text-sm">Thử lại</button>
+            </div>
+          </div>
+        </>
+      );
+    }
     return (
       <>
         <BrandStyles />
@@ -1312,7 +1320,7 @@ export default function App() {
           </>
         ) : (
           <>
-            {view === "home" && <HomeScreen user={user} entries={scoredEntries} roster={roster} onOpenAdd={() => setShowAdd(true)} onLike={handleLike} />}
+            {view === "home" && <HomeScreen user={user} entries={scoredEntries} roster={roster} onOpenAdd={() => setShowAdd(true)} />}
             {view === "history" && <HistoryScreen user={user} entries={entries} />}
             {view === "leaderboard" && <LeaderboardScreen entries={scoredEntries} roster={roster} currentUserId={user.id} />}
           </>
