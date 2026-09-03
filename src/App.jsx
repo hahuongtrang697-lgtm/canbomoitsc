@@ -255,7 +255,7 @@ function buildRosterStats(roster, entries, earlyMap, excludedDates, classEndDate
     const list = (byUser[u.id] || []).sort((a, b) => a.timestamp - b.timestamp);
     const stats = computeUserStats(list, earlyMap, excludedDates, classEndDate);
     const lastDay = list.length ? dayKey(list[list.length - 1].timestamp) : null;
-    const missedDays = lastDay ? effectiveDaysBetween(lastDay, effectiveToday(classEndDate), excludedDates) : null; // null = chưa từng ứng dụng
+    const missedDays = lastDay ? effectiveDaysBetween(lastDay, effectiveToday(classEndDate), excludedDates) - 1 : null; // -1: khoan hồng ngày hôm nay, chỉ tính khi đã hết ngày. null = chưa từng ứng dụng
     return { ...u, ...stats, missedDays };
   });
 }
@@ -805,10 +805,10 @@ function AdminScreen({ entries, scoredEntries, roster, classCode, classStartDate
       const fullList = (fullByUser[u.id] || []).sort((a, b) => a.timestamp - b.timestamp);
       const stats = computeUserStats(scoredList, earlyMap, excludedDates, classEndDate);
       const lastDay = scoredList.length ? dayKey(scoredList[scoredList.length - 1].timestamp) : null;
-      let missedDays = lastDay ? effectiveDaysBetween(lastDay, effectiveToday(classEndDate), excludedDates) : null;
+      let missedDays = lastDay ? effectiveDaysBetween(lastDay, effectiveToday(classEndDate), excludedDates) - 1 : null;
       // Chưa từng ứng dụng lần nào (tính từ ngày bắt đầu): nếu đã đặt "Ngày bắt đầu lớp", tính số ngày bỏ lỡ kể từ đó
       if (missedDays === null && classStartDate) {
-        const sinceStart = effectiveDaysBetween(classStartDate, effectiveToday(classEndDate), excludedDates);
+        const sinceStart = effectiveDaysBetween(classStartDate, effectiveToday(classEndDate), excludedDates) - 1;
         if (sinceStart >= 0) missedDays = sinceStart;
       }
       return { ...u, ...stats, list: fullList, missedDays };
