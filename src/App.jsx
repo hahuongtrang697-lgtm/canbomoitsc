@@ -61,6 +61,16 @@ const BrandStyles = () => (
   `}</style>
 );
 
+const UpdateBanner = ({ show }) => {
+  if (!show) return null;
+  return (
+    <div className="fixed top-0 left-0 right-0 z-50 accent-bg text-white text-sm px-4 py-2.5 flex items-center justify-center gap-3 flex-wrap">
+      <span>🔄 Đã có bản cập nhật mới — vui lòng tải lại để đảm bảo dữ liệu chính xác.</span>
+      <button onClick={() => window.location.reload()} className="bg-white text-[#D71249] font-semibold px-3 py-1 rounded-lg text-xs whitespace-nowrap">Tải lại ngay</button>
+    </div>
+  );
+};
+
 // ---------- Helpers ----------
 const dayKey = (ts) => {
   const d = new Date(ts);
@@ -79,11 +89,54 @@ const daysBetween = (a, b) => Math.round((new Date(b) - new Date(a)) / 86400000)
 const dayKeyToDate = (dk) => { const [y, m, d] = dk.split("-").map(Number); return new Date(y, m - 1, d); };
 const addDays = (date, n) => { const d = new Date(date); d.setDate(d.getDate() + n); return d; };
 
-// Tính các khoảng thời gian (>=2 ngày liên tiếp) mà 1 cá nhân KHÔNG ứng dụng, dựa trên danh sách ngày đã ứng dụng (sorted, dayKey)
-function computeMissedGaps(sortedDays) {
+// Danh sách ngày KHÔNG TÍNH cho 1 lớp = Thứ 7/CN tự động (trong khung ngày bắt đầu → kết thúc,
+// hoặc bắt đầu + 180 ngày nếu chưa đặt ngày kết thúc) + các ngày lễ BTC tự thêm thủ công.
+function buildExcludedDates(classStartDate, classEndDate, manualExcludedDates) {
+  const set = new Set(manualExcludedDates || []);
+  if (classStartDate) {
+    const start = dayKeyToDate(classStartDate);
+    const end = classEndDate ? dayKeyToDate(classEndDate) : addDays(start, 180);
+    let cur = new Date(start);
+    while (cur <= end) {
+      const dow = cur.getDay(); // 0 = Chủ nhật, 6 = Thứ 7
+      if (dow === 0 || dow === 6) set.add(dayKey(cur.getTime()));
+      cur = addDays(cur, 1);
+    }
+  }
+  return Array.from(set);
+}
+// Số ngày NGHỈ (không tính) nằm strictly giữa 2 ngày a và b
+function countExcludedBetween(a, b, excludedDates) {
+  if (!excludedDates || excludedDates.length === 0) return 0;
+  const set = new Set(excludedDates);
+  let count = 0;
+  let cur = addDays(dayKeyToDate(a), 1);
+  const endDate = dayKeyToDate(b);
+  while (cur < endDate) {
+    if (set.has(dayKey(cur.getTime()))) count++;
+    cur = addDays(cur, 1);
+  }
+  return count;
+}
+// Giống daysBetween nhưng KHÔNG tính các ngày nghỉ (T7/CN + lễ) nằm giữa — để streak/số ngày
+// bỏ lỡ không bị "đứt" oan vì trúng ngày nghỉ.
+function effectiveDaysBetween(a, b, excludedDates) {
+  return daysBetween(a, b) - countExcludedBetween(a, b, excludedDates);
+}
+// "Hôm nay" dùng để tính số ngày bỏ lỡ — nếu lớp đã qua "Ngày kết thúc", chốt mốc tại đúng ngày
+// kết thúc đó, không để số ngày bỏ lỡ tiếp tục tăng vô hạn sau khi lớp đã xong.
+function effectiveToday(classEndDate) {
+  const t = todayKey();
+  if (classEndDate && t > classEndDate) return classEndDate;
+  return t;
+}
+
+// Tính các khoảng thời gian (>=2 ngày liên tiếp CÓ TÍNH) mà 1 cá nhân KHÔNG ứng dụng, dựa trên danh sách ngày đã ứng dụng (sorted, dayKey)
+function computeMissedGaps(sortedDays, excludedDates, classEndDate) {
+  const todayStr = effectiveToday(classEndDate);
   const gaps = [];
   for (let i = 0; i < sortedDays.length - 1; i++) {
-    const gap = daysBetween(sortedDays[i], sortedDays[i + 1]);
+    const gap = effectiveDaysBetween(sortedDays[i], sortedDays[i + 1], excludedDates);
     const missed = gap - 1;
     if (missed >= 2) {
       const start = addDays(dayKeyToDate(sortedDays[i]), 1);
@@ -93,10 +146,10 @@ function computeMissedGaps(sortedDays) {
   }
   if (sortedDays.length > 0) {
     const lastDay = sortedDays[sortedDays.length - 1];
-    const missed = daysBetween(lastDay, todayKey()) - 1;
+    const missed = effectiveDaysBetween(lastDay, todayStr, excludedDates) - 1;
     if (missed >= 2) {
       const start = addDays(dayKeyToDate(lastDay), 1);
-      const end = addDays(new Date(), -1);
+      const end = addDays(dayKeyToDate(todayStr), -1);
       gaps.push({ start: start.getTime(), end: end.getTime(), missed, ongoing: true });
     }
   }
@@ -105,14 +158,14 @@ function computeMissedGaps(sortedDays) {
 const uid = () => Math.random().toString(36).slice(2, 10);
 const normUsername = (s) => (s || "").trim().toLowerCase();
 
-function computeUserStats(userEntries, earlyBirdDayMap) {
+function computeUserStats(userEntries, earlyBirdDayMap, excludedDates, classEndDate) {
   if (userEntries.length === 0) return { points: 0, streak: 0, longestStreak: 0, daysLogged: 0 };
   const days = [...new Set(userEntries.map((e) => dayKey(e.timestamp)))].sort();
   let points = 0, curStreak = 0, longestStreak = 0, prevDay = null;
   days.forEach((d) => {
     if (prevDay === null) curStreak = 1;
     else {
-      const gap = daysBetween(prevDay, d);
+      const gap = effectiveDaysBetween(prevDay, d, excludedDates);
       if (gap === 1) curStreak += 1;
       else {
         if (gap - 1 >= 2) points -= 1;
@@ -132,13 +185,13 @@ function computeUserStats(userEntries, earlyBirdDayMap) {
     if ((earlyBirdDayMap[d] || []).includes(e.id)) points += 1;
   });
   const lastDay = days[days.length - 1];
-  const activeStreak = daysBetween(lastDay, todayKey()) <= 1 ? curStreak : 0;
+  const activeStreak = effectiveDaysBetween(lastDay, effectiveToday(classEndDate), excludedDates) <= 1 ? curStreak : 0;
   return { points, streak: activeStreak, longestStreak, daysLogged: days.length };
 }
 
 // Tính điểm của TỪNG bài (dùng cho Excel) — tổng các bài của 1 người cộng lại
 // luôn khớp đúng với computeUserStats(...).points ở trên, vì dùng chung 1 công thức.
-function computeEntryPoints(userEntries, earlyBirdDayMap) {
+function computeEntryPoints(userEntries, earlyBirdDayMap, excludedDates) {
   const result = {};
   if (userEntries.length === 0) return result;
   const byDay = {};
@@ -150,7 +203,7 @@ function computeEntryPoints(userEntries, earlyBirdDayMap) {
     let gapPenalty = 0;
     if (prevDay === null) curStreak = 1;
     else {
-      const gap = daysBetween(prevDay, d);
+      const gap = effectiveDaysBetween(prevDay, d, excludedDates);
       if (gap === 1) curStreak += 1;
       else { if (gap - 1 >= 2) gapPenalty = -1; curStreak = 1; }
     }
@@ -188,14 +241,14 @@ function earlyBirdMapForDay(entries) {
 }
 
 // Gộp roster + entries thành danh sách kèm điểm/streak/số ngày bỏ lỡ liên tiếp gần nhất
-function buildRosterStats(roster, entries, earlyMap) {
+function buildRosterStats(roster, entries, earlyMap, excludedDates, classEndDate) {
   const byUser = {};
   entries.forEach((e) => { byUser[e.userId] = byUser[e.userId] || []; byUser[e.userId].push(e); });
   return roster.map((u) => {
     const list = (byUser[u.id] || []).sort((a, b) => a.timestamp - b.timestamp);
-    const stats = computeUserStats(list, earlyMap);
+    const stats = computeUserStats(list, earlyMap, excludedDates, classEndDate);
     const lastDay = list.length ? dayKey(list[list.length - 1].timestamp) : null;
-    const missedDays = lastDay ? daysBetween(lastDay, todayKey()) : null; // null = chưa từng ứng dụng
+    const missedDays = lastDay ? effectiveDaysBetween(lastDay, effectiveToday(classEndDate), excludedDates) : null; // null = chưa từng ứng dụng
     return { ...u, ...stats, missedDays };
   });
 }
@@ -326,6 +379,7 @@ function AddEntryScreen({ onSave, onClose }) {
   const [result, setResult] = useState("");
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
+  const savingLockRef = useRef(false); // khóa TỨC THỜI, không đợi React render lại — chặn bấm đúp cực nhanh
   const items = CATEGORY_GROUPS.find((g) => g.group === group)?.items || [];
 
   return (
@@ -360,8 +414,9 @@ function AddEntryScreen({ onSave, onClose }) {
         <button
           disabled={saving}
           onClick={async () => {
-            if (saving) return;
+            if (savingLockRef.current) return; // khóa tức thời, không chờ React render lại
             if (!context.trim() || !action.trim() || !result.trim()) { setError("Vui lòng nhập đầy đủ cả 3 mục: Bối cảnh, Hành vi thực hiện, Kết quả đạt được."); return; }
+            savingLockRef.current = true;
             setSaving(true);
             setError("");
             try {
@@ -369,6 +424,7 @@ function AddEntryScreen({ onSave, onClose }) {
               // Thành công: onSave (App) đã tự đóng form. Nếu vì lý do gì form vẫn còn mở tới đây, không làm gì thêm.
             } catch (err) {
               setError("Lưu thất bại (có thể do mất mạng). Bài viết CHƯA được ghi nhận — vui lòng bấm Lưu lại.");
+              savingLockRef.current = false;
               setSaving(false);
             }
           }}
@@ -379,13 +435,13 @@ function AddEntryScreen({ onSave, onClose }) {
 }
 
 // ---------- Home ----------
-function HomeScreen({ user, entries, roster, onOpenAdd }) {
+function HomeScreen({ user, entries, roster, onOpenAdd, excludedDates, classEndDate }) {
   const myEntries = useMemo(() => entries.filter((e) => e.userId === user.id).sort((a, b) => a.timestamp - b.timestamp), [entries, user.id]);
   const earlyMap = useMemo(() => earlyBirdMapForDay(entries), [entries]);
-  const myStats = useMemo(() => computeUserStats(myEntries, earlyMap), [myEntries, earlyMap]);
+  const myStats = useMemo(() => computeUserStats(myEntries, earlyMap, excludedDates, classEndDate), [myEntries, earlyMap, excludedDates, classEndDate]);
   const doneToday = myEntries.some((e) => dayKey(e.timestamp) === todayKey());
 
-  const allStats = useMemo(() => buildRosterStats(roster, entries, earlyMap), [entries, roster, earlyMap]);
+  const allStats = useMemo(() => buildRosterStats(roster, entries, earlyMap, excludedDates, classEndDate), [entries, roster, earlyMap, excludedDates, classEndDate]);
 
   const leaderboard = useMemo(() => [...allStats].sort((a, b) => b.points - a.points).slice(0, 5), [allStats]);
   const myRank = useMemo(() => [...allStats].sort((a, b) => b.points - a.points).findIndex((u) => u.id === user.id) + 1, [allStats, user.id]);
@@ -393,7 +449,7 @@ function HomeScreen({ user, entries, roster, onOpenAdd }) {
   const latest10 = useMemo(() => [...entries].sort((a, b) => b.timestamp - a.timestamp).slice(0, 10), [entries]);
   // Các khoảng ngày CÁ NHÂN (≥2 ngày liên tiếp) mà chính học viên này chưa ứng dụng
   const myDays = useMemo(() => [...new Set(myEntries.map((e) => dayKey(e.timestamp)))].sort(), [myEntries]);
-  const myMissedGaps = useMemo(() => computeMissedGaps(myDays), [myDays]);
+  const myMissedGaps = useMemo(() => computeMissedGaps(myDays, excludedDates, classEndDate), [myDays, excludedDates, classEndDate]);
 
   return (
     <div className="pb-24 md:pb-8">
@@ -535,16 +591,16 @@ function HistoryScreen({ user, entries }) {
 }
 
 // ---------- Leaderboard full ----------
-function LeaderboardScreen({ entries, roster, currentUserId }) {
+function LeaderboardScreen({ entries, roster, currentUserId, excludedDates, classEndDate }) {
   const earlyMap = useMemo(() => earlyBirdMapForDay(entries), [entries]);
   const allStats = useMemo(() => {
     const byUser = {};
     entries.forEach((e) => { byUser[e.userId] = byUser[e.userId] || []; byUser[e.userId].push(e); });
     return roster.map((u) => {
       const list = (byUser[u.id] || []).sort((a, b) => a.timestamp - b.timestamp);
-      return { ...u, ...computeUserStats(list, earlyMap) };
+      return { ...u, ...computeUserStats(list, earlyMap, excludedDates, classEndDate) };
     }).sort((a, b) => b.points - a.points);
-  }, [entries, roster, earlyMap]);
+  }, [entries, roster, earlyMap, excludedDates, classEndDate]);
 
   return (
     <div className="max-w-3xl mx-auto px-5 md:px-8 pt-6 pb-24 md:pb-8">
@@ -564,7 +620,7 @@ function LeaderboardScreen({ entries, roster, currentUserId }) {
 }
 
 // ---------- Admin: Accounts management ----------
-function AdminAccountsScreen({ roster, defaultPassword, classStartDate, classCode, onAdd, onBulkImport, onToggleLock, onResetPassword, onDelete, onDefaultPasswordChange, onClassStartDateChange, onDeleteClass }) {
+function AdminAccountsScreen({ roster, defaultPassword, classStartDate, classEndDate, excludedDates, classCode, onAdd, onBulkImport, onToggleLock, onResetPassword, onDelete, onDefaultPasswordChange, onClassStartDateChange, onClassEndDateChange, onExcludedDatesChange, onDeleteClass }) {
   const [name, setName] = useState("");
   const [confirmText, setConfirmText] = useState("");
   const [username, setUsername] = useState("");
@@ -572,6 +628,7 @@ function AdminAccountsScreen({ roster, defaultPassword, classStartDate, classCod
   const [error, setError] = useState("");
   const [importMsg, setImportMsg] = useState("");
   const [actionError, setActionError] = useState("");
+  const [newExcludedDate, setNewExcludedDate] = useState("");
   const fileRef = useRef(null);
 
   const addManual = async () => {
@@ -616,7 +673,7 @@ function AdminAccountsScreen({ roster, defaultPassword, classStartDate, classCod
       <Pill tone="blue">Lớp {classCode}</Pill>
       <div className="mb-4" />
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-5">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-5">
         <Card className="p-4">
           <p className="text-sm font-medium text-gray-700 mb-2">Mật khẩu mặc định cấp cho tài khoản mới</p>
           <div className="flex gap-2">
@@ -630,9 +687,38 @@ function AdminAccountsScreen({ roster, defaultPassword, classStartDate, classCod
           <div className="flex gap-2">
             <Field type="date" value={classStartDate} onChange={(e) => onClassStartDateChange(e.target.value)} />
           </div>
-          <p className="text-[11px] text-gray-400 mt-1.5">Học viên chưa từng ứng dụng lần nào sẽ được tính số ngày bỏ lỡ kể từ ngày này. Để trống nếu chưa muốn áp dụng.</p>
+          <p className="text-[11px] text-gray-400 mt-1.5">Học viên chưa từng ứng dụng sẽ được tính số ngày bỏ lỡ từ ngày này. Tự động tính Thứ 7/CN là ngày nghỉ.</p>
+        </Card>
+
+        <Card className="p-4">
+          <p className="text-sm font-medium text-gray-700 mb-2">Ngày kết thúc lớp</p>
+          <div className="flex gap-2">
+            <Field type="date" value={classEndDate} onChange={(e) => onClassEndDateChange(e.target.value)} />
+          </div>
+          <p className="text-[11px] text-gray-400 mt-1.5">Sau ngày này, số ngày bỏ lỡ sẽ dừng tăng thêm. Để trống nếu lớp chưa kết thúc.</p>
         </Card>
       </div>
+
+      <Card className="p-4 mb-5">
+        <p className="text-sm font-medium text-gray-700 mb-2">Các ngày lễ đặc biệt không tính</p>
+        <div className="flex gap-2 mb-2">
+          <Field type="date" value={newExcludedDate} onChange={(e) => setNewExcludedDate(e.target.value)} />
+          <button
+            onClick={() => { if (newExcludedDate && !excludedDates.includes(newExcludedDate)) { onExcludedDatesChange([...excludedDates, newExcludedDate].sort()); setNewExcludedDate(""); } }}
+            className="brand-bg text-white font-semibold px-4 rounded-xl text-sm whitespace-nowrap"
+          >Thêm ngày</button>
+        </div>
+        {excludedDates.length > 0 ? (
+          <div className="flex flex-wrap gap-1.5">
+            {excludedDates.map((d) => (
+              <span key={d} className="flex items-center gap-1.5 bg-gray-100 text-gray-700 text-xs pl-2.5 pr-1.5 py-1 rounded-full">
+                {fmtDate(dayKeyToDate(d).getTime())}
+                <button onClick={() => onExcludedDatesChange(excludedDates.filter((x) => x !== d))} className="w-4 h-4 rounded-full bg-gray-300 flex items-center justify-center hover:bg-gray-400"><X size={10} /></button>
+              </span>
+            ))}
+          </div>
+        ) : <p className="text-[11px] text-gray-400">Thứ 7/CN đã tự động không tính, chỉ cần thêm thêm các ngày lễ rơi vào ngày thường (VD: Giỗ tổ, Quốc khánh...).</p>}
+      </Card>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-5">
         <Card className="p-4">
@@ -696,7 +782,7 @@ function AdminAccountsScreen({ roster, defaultPassword, classStartDate, classCod
 }
 
 // ---------- Admin: Dashboard ----------
-function AdminScreen({ entries, scoredEntries, roster, classCode, classStartDate, onDeleteEntry }) {
+function AdminScreen({ entries, scoredEntries, roster, classCode, classStartDate, classEndDate, excludedDates, onDeleteEntry }) {
   const [selected, setSelected] = useState(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState(null);
   const [deleteEntryError, setDeleteEntryError] = useState("");
@@ -710,17 +796,17 @@ function AdminScreen({ entries, scoredEntries, roster, classCode, classStartDate
     return roster.map((u) => {
       const scoredList = (scoredByUser[u.id] || []).sort((a, b) => a.timestamp - b.timestamp);
       const fullList = (fullByUser[u.id] || []).sort((a, b) => a.timestamp - b.timestamp);
-      const stats = computeUserStats(scoredList, earlyMap);
+      const stats = computeUserStats(scoredList, earlyMap, excludedDates, classEndDate);
       const lastDay = scoredList.length ? dayKey(scoredList[scoredList.length - 1].timestamp) : null;
-      let missedDays = lastDay ? daysBetween(lastDay, todayKey()) : null;
+      let missedDays = lastDay ? effectiveDaysBetween(lastDay, effectiveToday(classEndDate), excludedDates) : null;
       // Chưa từng ứng dụng lần nào (tính từ ngày bắt đầu): nếu đã đặt "Ngày bắt đầu lớp", tính số ngày bỏ lỡ kể từ đó
       if (missedDays === null && classStartDate) {
-        const sinceStart = daysBetween(classStartDate, todayKey());
+        const sinceStart = effectiveDaysBetween(classStartDate, effectiveToday(classEndDate), excludedDates);
         if (sinceStart >= 0) missedDays = sinceStart;
       }
       return { ...u, ...stats, list: fullList, missedDays };
     }).sort((a, b) => b.points - a.points);
-  }, [entries, scoredEntries, roster, earlyMap, classStartDate]);
+  }, [entries, scoredEntries, roster, earlyMap, classStartDate, classEndDate, excludedDates]);
 
   const doneToday = allStats.filter((u) => u.list.some((e) => dayKey(e.timestamp) === todayKey()));
   const notDoneToday = allStats.filter((u) => !u.list.some((e) => dayKey(e.timestamp) === todayKey()));
@@ -740,7 +826,7 @@ function AdminScreen({ entries, scoredEntries, roster, classCode, classStartDate
     const entryPointsByUser = {};
     allStats.forEach((u) => {
       const scoredOnly = u.list.filter((e) => !classStartDate || dayKey(e.timestamp) >= classStartDate);
-      entryPointsByUser[u.id] = computeEntryPoints(scoredOnly, earlyMap);
+      entryPointsByUser[u.id] = computeEntryPoints(scoredOnly, earlyMap, excludedDates);
     });
     const rows = entries.slice().sort((a, b) => a.timestamp - b.timestamp).map((e) => {
       const u = allStats.find((x) => x.id === e.userId);
@@ -959,24 +1045,26 @@ function AdminScreen({ entries, scoredEntries, roster, classCode, classStartDate
 // ---------- Admin: Danh sách các lớp ----------
 function ClassesOverviewScreen({ classIndex, currentClass, onSwitchClass, onGoToDashboard }) {
   const [classes, setClasses] = useState(null); // null = đang tải
+  const [loadErrorClasses, setLoadErrorClasses] = useState([]); // các mã lớp đọc bị lỗi (không phải "0 người")
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
       const results = [];
+      const errored = [];
       for (const c of classIndex) {
         try {
-          const r = await storageGet(rosterKey(c)).catch(() => null);
-          const e = await storageGet(entriesKey(c)).catch(() => null);
+          const r = await storageGet(rosterKey(c));
+          const e = await storageGet(entriesKey(c));
           const rosterArr = r ? JSON.parse(r.value) : [];
           const entriesArr = e ? JSON.parse(e.value) : [];
           let lastActivity = null;
           entriesArr.forEach((en) => { if (!lastActivity || en.timestamp > lastActivity) lastActivity = en.timestamp; });
           results.push({ classCode: c, studentCount: rosterArr.length, entryCount: entriesArr.length, lastActivity });
-        } catch (err) { /* bỏ qua lớp lỗi, không chặn cả danh sách */ }
+        } catch (err) { errored.push(c); /* không đẩy vào results với số liệu sai (0) — tách riêng để báo lỗi rõ */ }
       }
       results.sort((a, b) => (b.lastActivity || 0) - (a.lastActivity || 0));
-      if (!cancelled) setClasses(results);
+      if (!cancelled) { setClasses(results); setLoadErrorClasses(errored); }
     })();
     return () => { cancelled = true; };
   }, [classIndex]);
@@ -988,7 +1076,10 @@ function ClassesOverviewScreen({ classIndex, currentClass, onSwitchClass, onGoTo
 
       <div className="space-y-2.5">
         {classes === null && <p className="text-sm text-gray-400">Đang tải dữ liệu các lớp...</p>}
-        {classes !== null && classes.length === 0 && <p className="text-sm text-gray-400">Chưa có lớp nào có dữ liệu.</p>}
+        {classes !== null && loadErrorClasses.length > 0 && (
+          <p className="text-xs accent-text mb-2">⚠️ Không tải được dữ liệu của: {loadErrorClasses.join(", ")} (mất mạng?). Số liệu các lớp này KHÔNG hiện ở đây — không phải các lớp đó rỗng.</p>
+        )}
+        {classes !== null && classes.length === 0 && loadErrorClasses.length === 0 && <p className="text-sm text-gray-400">Chưa có lớp nào có dữ liệu.</p>}
         {(classes || []).map((c) => (
           <Card key={c.classCode} className={`p-4 ${c.classCode === currentClass ? "ring-2 brand-ring-2" : ""}`}>
             <div className="flex items-center justify-between gap-3">
@@ -1100,6 +1191,9 @@ export default function App() {
   const [entries, setEntries] = useState([]); // entries của ĐÚNG lớp đang hoạt động
   const [defaultPassword, setDefaultPassword] = useState("123456");
   const [classStartDate, setClassStartDate] = useState(""); // ngày bắt đầu lớp (yyyy-mm-dd), để trống = không áp dụng
+  const [classEndDate, setClassEndDate] = useState("");
+  const [excludedDates, setExcludedDates] = useState([]); // các ngày lễ đặc biệt (thủ công), KHÔNG gồm T7/CN (tự động tính riêng)
+  const effectiveExcludedDates = useMemo(() => buildExcludedDates(classStartDate, classEndDate, excludedDates), [classStartDate, classEndDate, excludedDates]);
   const [view, setView] = useState("home");
   const [showAdd, setShowAdd] = useState(false);
   const [loaded, setLoaded] = useState(false); // đã tải xong classIndex (đủ để hiện màn đăng nhập)
@@ -1109,6 +1203,30 @@ export default function App() {
   // entries (đầy đủ, không lọc) vẫn giữ để hiện Lịch sử cá nhân và xuất Excel chi tiết.
   const scoredEntries = useMemo(() => filterByStartDate(entries, classStartDate), [entries, classStartDate]);
   const [saveError, setSaveError] = useState("");
+  const [newVersionAvailable, setNewVersionAvailable] = useState(false);
+
+  // Phát hiện khi server đã có bản build mới hơn bản đang chạy trên máy học viên — so sánh đường
+  // dẫn file script hiện tại (có mã hash riêng cho mỗi lần build) với bản mới nhất lấy từ index.html
+  // trên server. Nếu khác nhau, hiện thanh nhắc tải lại — giúp học viên không vô tình dùng code cũ
+  // (nguyên nhân có thể gây mất dữ liệu do ghi đè, như đã trao đổi).
+  useEffect(() => {
+    const myBuildSrc = document.querySelector('script[type="module"]')?.src || "";
+    if (!myBuildSrc) return;
+    const checkForUpdate = async () => {
+      try {
+        const res = await fetch("/?_=" + Date.now(), { cache: "no-store" });
+        const html = await res.text();
+        const match = html.match(/<script[^>]+type="module"[^>]+src="([^"]+)"/);
+        if (!match) return;
+        const latestSrc = new URL(match[1], window.location.origin).href;
+        if (latestSrc && latestSrc !== myBuildSrc) setNewVersionAvailable(true);
+      } catch (err) { /* lỗi mạng lúc kiểm tra — bỏ qua, thử lại ở lần kế tiếp */ }
+    };
+    const intervalId = setInterval(checkForUpdate, 3 * 60 * 1000); // mỗi 3 phút
+    const onVisible = () => { if (document.visibilityState === "visible") checkForUpdate(); };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => { clearInterval(intervalId); document.removeEventListener("visibilitychange", onVisible); };
+  }, []);
 
   // Tải danh sách mã lớp (tài liệu nhỏ, không phụ thuộc đăng nhập)
   const loadClassIndex = useCallback(async () => {
@@ -1153,6 +1271,8 @@ export default function App() {
       setEntries(e ? JSON.parse(e.value) : []);
       setDefaultPassword(s ? (JSON.parse(s.value).defaultPassword || "123456") : "123456");
       setClassStartDate(s ? (JSON.parse(s.value).classStartDate || "") : "");
+      setClassEndDate(s ? (JSON.parse(s.value).classEndDate || "") : "");
+      setExcludedDates(s ? (JSON.parse(s.value).excludedDates || []) : []);
       setClassDataLoaded(true);
     } catch (err) {
       setClassLoadError("Không tải được dữ liệu (có thể do mất mạng). Dữ liệu của bạn vẫn an toàn trên hệ thống — chỉ là chưa tải lên được. Vui lòng bấm Thử lại.");
@@ -1183,8 +1303,20 @@ export default function App() {
       throw e; // ném lỗi ra ngoài để nơi gọi (VD: form thêm bài) biết mà KHÔNG đóng form/coi như thành công
     }
   };
-  const persistSettings = async (pwd) => { setDefaultPassword(pwd); try { await storageSet(settingsKey(user.classCode), JSON.stringify({ defaultPassword: pwd, classStartDate })); } catch (e) { /* noop */ } };
-  const persistClassStartDate = async (dateStr) => { setClassStartDate(dateStr); try { await storageSet(settingsKey(user.classCode), JSON.stringify({ defaultPassword, classStartDate: dateStr })); } catch (e) { /* noop */ } };
+  // Lưu cấu hình lớp (mật khẩu mặc định / ngày bắt đầu / ngày kết thúc / ngày nghỉ) — luôn ghi ĐỦ
+  // cả 4 trường cùng lúc để không vô tình xóa mất các trường khác đã lưu trước đó.
+  const persistSettingsField = async (updates) => {
+    const next = { defaultPassword, classStartDate, classEndDate, excludedDates, ...updates };
+    if (updates.defaultPassword !== undefined) setDefaultPassword(updates.defaultPassword);
+    if (updates.classStartDate !== undefined) setClassStartDate(updates.classStartDate);
+    if (updates.classEndDate !== undefined) setClassEndDate(updates.classEndDate);
+    if (updates.excludedDates !== undefined) setExcludedDates(updates.excludedDates);
+    try { await storageSet(settingsKey(user.classCode), JSON.stringify(next)); } catch (e) { setSaveError("Lỗi lưu cấu hình lớp."); }
+  };
+  const persistSettings = (pwd) => persistSettingsField({ defaultPassword: pwd });
+  const persistClassStartDate = (d) => persistSettingsField({ classStartDate: d });
+  const persistClassEndDate = (d) => persistSettingsField({ classEndDate: d });
+  const persistExcludedDates = (arr) => persistSettingsField({ excludedDates: arr });
 
   // Học viên đăng nhập bằng User AD — chưa biết trước thuộc lớp nào, nên dò qua từng lớp trong classIndex
   const attemptLogin = async (username, password) => {
@@ -1271,6 +1403,7 @@ export default function App() {
     return (
       <>
         <BrandStyles />
+        <UpdateBanner show={newVersionAvailable} />
         <LoginScreen classIndex={classIndex} onLoginAttempt={attemptLogin} onAdminLogin={handleAdminLogin} />
       </>
     );
@@ -1303,6 +1436,7 @@ export default function App() {
   return (
     <div className="min-h-screen app-bg flex" style={{ fontFamily: "'Inter', system-ui, -apple-system, sans-serif" }}>
       <BrandStyles />
+      <UpdateBanner show={newVersionAvailable} />
       <Sidebar view={view} setView={setView} items={navItems} user={user} onLogout={() => setUser(null)} existingClasses={classIndex} onSwitchClass={switchAdminClass} />
 
       <div className="flex-1 min-w-0">
@@ -1313,12 +1447,12 @@ export default function App() {
 
         {user.isAdmin ? (
           <>
-            {view === "admin" && <AdminScreen entries={entries} scoredEntries={scoredEntries} roster={roster} classCode={user.classCode} classStartDate={classStartDate} onDeleteEntry={deleteEntry} />}
+            {view === "admin" && <AdminScreen entries={entries} scoredEntries={scoredEntries} roster={roster} classCode={user.classCode} classStartDate={classStartDate} classEndDate={classEndDate} excludedDates={effectiveExcludedDates} onDeleteEntry={deleteEntry} />}
             {view === "accounts" && (
               <AdminAccountsScreen
-                roster={roster} defaultPassword={defaultPassword} classStartDate={classStartDate} classCode={user.classCode}
+                roster={roster} defaultPassword={defaultPassword} classStartDate={classStartDate} classEndDate={classEndDate} excludedDates={excludedDates} classCode={user.classCode}
                 onAdd={addAccount} onBulkImport={bulkImport} onToggleLock={toggleLock}
-                onResetPassword={resetPassword} onDelete={deleteAccount} onDefaultPasswordChange={persistSettings} onClassStartDateChange={persistClassStartDate} onDeleteClass={deleteClassData}
+                onResetPassword={resetPassword} onDelete={deleteAccount} onDefaultPasswordChange={persistSettings} onClassStartDateChange={persistClassStartDate} onClassEndDateChange={persistClassEndDate} onExcludedDatesChange={persistExcludedDates} onDeleteClass={deleteClassData}
               />
             )}
             {view === "classes" && (
@@ -1331,9 +1465,9 @@ export default function App() {
           </>
         ) : (
           <>
-            {view === "home" && <HomeScreen user={user} entries={scoredEntries} roster={roster} onOpenAdd={() => setShowAdd(true)} />}
+            {view === "home" && <HomeScreen user={user} entries={scoredEntries} roster={roster} onOpenAdd={() => setShowAdd(true)} excludedDates={effectiveExcludedDates} classEndDate={classEndDate} />}
             {view === "history" && <HistoryScreen user={user} entries={entries} />}
-            {view === "leaderboard" && <LeaderboardScreen entries={scoredEntries} roster={roster} currentUserId={user.id} />}
+            {view === "leaderboard" && <LeaderboardScreen entries={scoredEntries} roster={roster} currentUserId={user.id} excludedDates={effectiveExcludedDates} classEndDate={classEndDate} />}
           </>
         )}
       </div>
