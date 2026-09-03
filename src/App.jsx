@@ -227,6 +227,13 @@ function filterByStartDate(entriesList, startDate) {
   if (!startDate) return entriesList;
   return entriesList.filter((e) => dayKey(e.timestamp) >= startDate);
 }
+// Lọc bỏ các bài nhập ĐÚNG VÀO ngày nghỉ (T7/CN + ngày lễ) khỏi mọi tính toán điểm/dashboard —
+// vẫn hiện đầy đủ trong Lịch sử cá nhân (Lịch sử dùng entries gốc, không qua hàm này).
+function filterByExcludedDates(entriesList, excludedDates) {
+  if (!excludedDates || excludedDates.length === 0) return entriesList;
+  const set = new Set(excludedDates);
+  return entriesList.filter((e) => !set.has(dayKey(e.timestamp)));
+}
 
 function earlyBirdMapForDay(entries) {
   const byDay = {};
@@ -822,21 +829,26 @@ function AdminScreen({ entries, scoredEntries, roster, classCode, classStartDate
     .sort((a, b) => a.daysLogged - b.daysLogged);
 
   const exportExcel = () => {
+    const excludedSet = new Set(excludedDates || []);
+    const isEntryCounted = (e) => (!classStartDate || dayKey(e.timestamp) >= classStartDate) && !excludedSet.has(dayKey(e.timestamp));
     // Tính điểm riêng cho từng bài (theo từng người) — tổng các dòng của 1 người = đúng "Điểm (tổng)"
     const entryPointsByUser = {};
     allStats.forEach((u) => {
-      const scoredOnly = u.list.filter((e) => !classStartDate || dayKey(e.timestamp) >= classStartDate);
+      const scoredOnly = u.list.filter(isEntryCounted);
       entryPointsByUser[u.id] = computeEntryPoints(scoredOnly, earlyMap, excludedDates);
     });
     const rows = entries.slice().sort((a, b) => a.timestamp - b.timestamp).map((e) => {
       const u = allStats.find((x) => x.id === e.userId);
-      const isCounted = !classStartDate || dayKey(e.timestamp) >= classStartDate;
+      const isCounted = isEntryCounted(e);
       const entryPoints = u && isCounted ? (entryPointsByUser[u.id][e.id] ?? 0) : 0;
+      const reasonNotCounted = classStartDate && dayKey(e.timestamp) < classStartDate
+        ? "Không (trước ngày bắt đầu lớp)"
+        : excludedSet.has(dayKey(e.timestamp)) ? "Không (rơi vào ngày nghỉ)" : "Có";
       return {
         "Ngày thực hiện": fmtDate(e.timestamp),
         "Tên": e.userName, "User AD": u ? u.username : "", "Đơn vị": e.dept,
         "Điểm": entryPoints, "Điểm (tổng)": u ? u.points : "", "Số ngày ứng dụng": u ? u.daysLogged : "",
-        "Tính vào điểm": isCounted ? "Có" : "Không (trước ngày bắt đầu lớp)",
+        "Tính vào điểm": isCounted ? "Có" : reasonNotCounted,
         "Early Bird": (earlyMap[dayKey(e.timestamp)] || []).includes(e.id) ? "Có" : "",
         "Thời gian nhập": new Date(e.timestamp).toLocaleString("vi-VN"),
         "Danh mục": e.group,
@@ -1201,7 +1213,10 @@ export default function App() {
   const [classLoadError, setClassLoadError] = useState(""); // lỗi khi tải dữ liệu lớp (VD: mất mạng) — khác với "chưa có dữ liệu"
   // scoredEntries: chỉ gồm bài từ "Ngày bắt đầu lớp" trở đi — dùng cho MỌI tính điểm/dashboard/xếp hạng.
   // entries (đầy đủ, không lọc) vẫn giữ để hiện Lịch sử cá nhân và xuất Excel chi tiết.
-  const scoredEntries = useMemo(() => filterByStartDate(entries, classStartDate), [entries, classStartDate]);
+  const scoredEntries = useMemo(
+    () => filterByExcludedDates(filterByStartDate(entries, classStartDate), effectiveExcludedDates),
+    [entries, classStartDate, effectiveExcludedDates]
+  );
   const [saveError, setSaveError] = useState("");
   const [newVersionAvailable, setNewVersionAvailable] = useState(false);
 
