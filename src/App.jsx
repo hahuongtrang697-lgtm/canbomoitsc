@@ -130,6 +130,20 @@ function effectiveToday(classEndDate) {
   if (classEndDate && t > classEndDate) return classEndDate;
   return t;
 }
+// Đếm số ngày CÓ TÍNH (không nghỉ) từ ngày bắt đầu (tính luôn) đến trước ngày kết thúc (không tính) — dùng riêng cho
+// trường hợp "chưa từng ứng dụng lần nào": phải tính cả chính "Ngày bắt đầu lớp" là 1 ngày có thể
+// đã bị bỏ lỡ (khác với công thức effectiveDaysBetween vốn dùng để đo khoảng cách GIỮA 2 lần đã nộp).
+function countEffectiveDaysInRange(startInclusive, endExclusive, excludedDates) {
+  const set = new Set(excludedDates || []);
+  let count = 0;
+  let cur = dayKeyToDate(startInclusive);
+  const end = dayKeyToDate(endExclusive);
+  while (cur < end) {
+    if (!set.has(dayKey(cur.getTime()))) count++;
+    cur = addDays(cur, 1);
+  }
+  return count;
+}
 
 // Tính các khoảng thời gian (>=2 ngày liên tiếp CÓ TÍNH) mà 1 cá nhân KHÔNG ứng dụng, dựa trên danh sách ngày đã ứng dụng (sorted, dayKey)
 function computeMissedGaps(sortedDays, excludedDates, classEndDate) {
@@ -806,9 +820,11 @@ function AdminScreen({ entries, scoredEntries, roster, classCode, classStartDate
       const stats = computeUserStats(scoredList, earlyMap, excludedDates, classEndDate);
       const lastDay = scoredList.length ? dayKey(scoredList[scoredList.length - 1].timestamp) : null;
       let missedDays = lastDay ? effectiveDaysBetween(lastDay, effectiveToday(classEndDate), excludedDates) - 1 : null;
-      // Chưa từng ứng dụng lần nào (tính từ ngày bắt đầu): nếu đã đặt "Ngày bắt đầu lớp", tính số ngày bỏ lỡ kể từ đó
+      // Chưa từng ứng dụng lần nào (tính từ ngày bắt đầu): nếu đã đặt "Ngày bắt đầu lớp", tính số ngày bỏ lỡ kể từ đó.
+      // Dùng countEffectiveDaysInRange (không phải effectiveDaysBetween) vì ở đây CHÍNH "Ngày bắt đầu lớp"
+      // cũng là 1 ngày có thể đã bị bỏ lỡ — khác với trường hợp "lastDay" ở trên (lastDay vốn là 1 lần ĐÃ nộp rồi).
       if (missedDays === null && classStartDate) {
-        const sinceStart = effectiveDaysBetween(classStartDate, effectiveToday(classEndDate), excludedDates) - 1;
+        const sinceStart = countEffectiveDaysInRange(classStartDate, effectiveToday(classEndDate), excludedDates);
         if (sinceStart >= 0) missedDays = sinceStart;
       }
       return { ...u, ...stats, list: fullList, missedDays };
