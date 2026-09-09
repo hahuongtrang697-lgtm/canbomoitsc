@@ -320,7 +320,6 @@ function LoginScreen({ classIndex, onLoginAttempt, onAdminLogin }) {
   const [password, setPassword] = useState("");
   const [adminEmail, setAdminEmail] = useState("");
   const [adminPassword, setAdminPassword] = useState("");
-  const [classCode, setClassCode] = useState("");
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
@@ -334,10 +333,9 @@ function LoginScreen({ classIndex, onLoginAttempt, onAdminLogin }) {
   };
   const submitAdmin = async () => {
     if (!adminEmail.trim() || !adminPassword) { setError("Vui lòng nhập đầy đủ Email và Mật khẩu Ban tổ chức."); return; }
-    if (!classCode.trim()) { setError("Vui lòng nhập Mã lớp bạn muốn quản lý."); return; }
     setSubmitting(true);
     setError("");
-    const res = await onAdminLogin(classCode.trim(), adminEmail.trim(), adminPassword);
+    const res = await onAdminLogin(adminEmail.trim(), adminPassword);
     setSubmitting(false);
     if (res && res.error) setError(res.error);
   };
@@ -381,22 +379,11 @@ function LoginScreen({ classIndex, onLoginAttempt, onAdminLogin }) {
               </div>
               <div>
                 <label className="text-xs font-medium text-gray-500 mb-1 block">Mật khẩu</label>
-                <Field icon={Lock} type="password" value={adminPassword} onChange={(e) => setAdminPassword(e.target.value)} placeholder="Mật khẩu" />
-              </div>
-              <div>
-                <label className="text-xs font-medium text-gray-500 mb-1 block">Mã lớp bạn muốn quản lý</label>
-                <Field value={classCode} onChange={(e) => setClassCode(e.target.value)} placeholder="VD: CBM-K15" onKeyDown={(e) => e.key === "Enter" && submitAdmin()} />
-                {classIndex.length > 0 && (
-                  <div className="flex flex-wrap gap-1.5 mt-2">
-                    {classIndex.map((c) => (
-                      <button key={c} onClick={() => setClassCode(c)} className="text-xs px-2.5 py-1 rounded-full bg-gray-100 text-gray-600 hover:bg-gray-200">{c}</button>
-                    ))}
-                  </div>
-                )}
-                <p className="text-[11px] text-gray-400 mt-1.5">Nhập mã lớp đã có ở trên, hoặc gõ mã mới để tạo lớp mới.</p>
+                <Field icon={Lock} type="password" value={adminPassword} onChange={(e) => setAdminPassword(e.target.value)} placeholder="Mật khẩu" onKeyDown={(e) => e.key === "Enter" && submitAdmin()} />
               </div>
               {error && <p className="accent-text text-xs">{error}</p>}
-              <button onClick={submitAdmin} disabled={submitting} className="w-full accent-bg text-white font-semibold py-3.5 rounded-xl active:scale-[0.98] transition mt-1 disabled:opacity-60">{submitting ? "Đang đăng nhập..." : "Vào Dashboard"}</button>
+              <button onClick={submitAdmin} disabled={submitting} className="w-full accent-bg text-white font-semibold py-3.5 rounded-xl active:scale-[0.98] transition mt-1 disabled:opacity-60">{submitting ? "Đang đăng nhập..." : "Đăng nhập"}</button>
+              <p className="text-[11px] text-gray-400 text-center pt-1">Sau khi đăng nhập, chọn lớp cần quản lý trong mục "Danh sách lớp".</p>
             </div>
           )}
         </Card>
@@ -1196,7 +1183,7 @@ function Sidebar({ view, setView, items, user, onLogout, existingClasses = [], o
           <p className="text-[10px] font-medium text-gray-400 uppercase mb-1">Đang quản lý lớp</p>
           {!switching ? (
             <button onClick={() => setSwitching(true)} className="w-full flex items-center justify-between px-3 py-2 rounded-xl bg-blue-50 brand-text text-sm font-semibold">
-              {user.classCode} <span className="text-[11px] font-normal">Đổi</span>
+              {user.classCode || "Chưa chọn lớp"} <span className="text-[11px] font-normal">Đổi</span>
             </button>
           ) : (
             <div className="space-y-1.5">
@@ -1415,20 +1402,20 @@ export default function App() {
     }
   };
 
-  const handleAdminLogin = async (classCode, email, password) => {
+  const handleAdminLogin = async (email, password) => {
     try {
       await authApi.signInAdmin(email, password); // xác thực THẬT qua Firebase — thay cho mã cố định cũ
     } catch (err) {
       return { error: "Email hoặc mật khẩu Ban tổ chức không đúng." };
     }
-    setUser({ id: "admin", name: "Ban tổ chức", isAdmin: true, classCode });
-    setView("admin");
-    await registerClass(classCode);
-    await loadClassData(classCode);
+    // Chưa chọn lớp nào — vào thẳng "Danh sách lớp" để tự chọn, không cần gõ mã lớp lúc đăng nhập
+    setUser({ id: "admin", name: "Ban tổ chức", isAdmin: true, classCode: null });
+    setView("classes");
     return { ok: true };
   };
   const switchAdminClass = async (classCode) => {
     setUser((u) => ({ ...u, classCode }));
+    setView("admin");
     await registerClass(classCode);
     await loadClassData(classCode);
   };
@@ -1486,6 +1473,26 @@ export default function App() {
       </>
     );
   }
+  // Ban tổ chức đã đăng nhập nhưng CHƯA chọn lớp nào — cho chọn lớp trước, chưa tải dữ liệu lớp cụ thể nào cả
+  if (user.isAdmin && !user.classCode) {
+    return (
+      <div className="min-h-screen app-bg flex" style={{ fontFamily: "'Inter', system-ui, -apple-system, sans-serif" }}>
+        <BrandStyles />
+        <UpdateBanner show={newVersionAvailable} />
+        <Sidebar view="classes" setView={() => {}} items={[{ id: "classes", label: "Danh sách lớp", icon: List }]} user={user} onLogout={handleLogout} existingClasses={classIndex} onSwitchClass={switchAdminClass} />
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center justify-end px-5 pt-3 md:hidden">
+            <button onClick={handleLogout} className="flex items-center gap-1 text-xs text-gray-400"><LogOut size={13} /> Đăng xuất</button>
+          </div>
+          <ClassesOverviewScreen
+            classIndex={classIndex} currentClass={null}
+            onSwitchClass={(c) => switchAdminClass(c)}
+            onGoToDashboard={() => {}}
+          />
+        </div>
+      </div>
+    );
+  }
   if (!classDataLoaded) {
     if (classLoadError) {
       return (
@@ -1536,7 +1543,7 @@ export default function App() {
             {view === "classes" && (
               <ClassesOverviewScreen
                 classIndex={classIndex} currentClass={user.classCode}
-                onSwitchClass={(c) => { switchAdminClass(c); setView("admin"); }}
+                onSwitchClass={(c) => switchAdminClass(c)}
                 onGoToDashboard={() => setView("admin")}
               />
             )}
