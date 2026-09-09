@@ -1,5 +1,6 @@
 import { initializeApp } from "firebase/app";
 import { getFirestore, doc, getDoc, setDoc, runTransaction } from "firebase/firestore";
+import { getAuth, signInAnonymously, signInWithEmailAndPassword, signOut as fbSignOut } from "firebase/auth";
 
 // 🔧 Firebase config của BẢN 2 (project: canbomoitscv2) — tách biệt hoàn toàn với bản 1
 const firebaseConfig = {
@@ -13,6 +14,34 @@ const firebaseConfig = {
 
 const app = initializeApp(firebaseConfig);
 const db = getFirestore(app);
+const auth = getAuth(app);
+
+// Bảo mật (Mức 1): MỌI thao tác ghi vào Firestore giờ bắt buộc phải "đã đăng nhập" (request.auth != null),
+// không còn ai ghi được mà không qua Firebase Auth nữa (chặn đúng lỗ hổng gây ra vụ can thiệp dữ liệu vừa qua).
+//
+// - Học viên: tự động "đăng nhập ẩn danh" (anonymous) ngay khi mở app — âm thầm, không cần thao tác gì,
+//   không đổi cách học viên đăng nhập vào app (vẫn dùng User AD như cũ). Đây chỉ là điều kiện kỹ thuật
+//   để Firebase cho phép ghi dữ liệu.
+// - Ban tổ chức: đăng nhập bằng TÀI KHOẢN THẬT (Email + Mật khẩu tạo trong Firebase Console),
+//   thay cho mã cố định "btc2026" từng bị lộ trong code.
+export const authApi = {
+  async ensureAnonymous() {
+    if (!auth.currentUser) {
+      await signInAnonymously(auth);
+    }
+    return auth.currentUser;
+  },
+  async signInAdmin(email, password) {
+    const cred = await signInWithEmailAndPassword(auth, email, password);
+    return cred.user;
+  },
+  async signOutAll() {
+    try { await fbSignOut(auth); } catch (e) { /* noop */ }
+  },
+  isAdminSignedIn() {
+    return !!auth.currentUser && !auth.currentUser.isAnonymous;
+  },
+};
 
 // API giống hệt window.storage trong Claude artifact, để phần còn lại
 // của app (App.jsx) không cần sửa gì thêm.

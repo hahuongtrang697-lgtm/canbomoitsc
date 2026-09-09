@@ -2,10 +2,10 @@ import React, { useState, useEffect, useMemo, useCallback, useRef } from "react"
 import * as XLSX from "xlsx";
 import {
   Flame, Trophy, Plus, Clock, BarChart3, LogOut, Download, X, ChevronRight,
-  Sunrise, AlertCircle, Check, User, Lock, Upload, UserPlus, KeyRound, Ban, Trash2,
+  Sunrise, AlertCircle, Check, User, Lock, Mail, Upload, UserPlus, KeyRound, Ban, Trash2,
   Menu, LayoutDashboard, Users2, Home as HomeIcon, List, Building2,
 } from "lucide-react";
-import { storage } from "./firebase.js";
+import { storage, authApi } from "./firebase.js";
 
 // ---------- Domain constants (PRD v1.1) ----------
 const CATEGORY_GROUPS = [
@@ -21,7 +21,6 @@ const CATEGORY_GROUPS = [
   },
 ];
 
-const ADMIN_PIN = "btc2026";
 const PROGRAM_DAYS = 10;
 const COMPLETION_THRESHOLD = 8; // Số ngày tối thiểu để tính là "hoàn thành toàn khóa"
 const CLASS_INDEX_KEY = "classIndex";
@@ -319,7 +318,8 @@ function LoginScreen({ classIndex, onLoginAttempt, onAdminLogin }) {
   const [mode, setMode] = useState("student");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
-  const [pin, setPin] = useState("");
+  const [adminEmail, setAdminEmail] = useState("");
+  const [adminPassword, setAdminPassword] = useState("");
   const [classCode, setClassCode] = useState("");
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -332,10 +332,14 @@ function LoginScreen({ classIndex, onLoginAttempt, onAdminLogin }) {
     setSubmitting(false);
     if (res && res.error) setError(res.error);
   };
-  const submitAdmin = () => {
-    if (pin !== ADMIN_PIN) { setError("Mã Ban tổ chức không đúng."); return; }
+  const submitAdmin = async () => {
+    if (!adminEmail.trim() || !adminPassword) { setError("Vui lòng nhập đầy đủ Email và Mật khẩu Ban tổ chức."); return; }
     if (!classCode.trim()) { setError("Vui lòng nhập Mã lớp bạn muốn quản lý."); return; }
-    onAdminLogin(classCode.trim());
+    setSubmitting(true);
+    setError("");
+    const res = await onAdminLogin(classCode.trim(), adminEmail.trim(), adminPassword);
+    setSubmitting(false);
+    if (res && res.error) setError(res.error);
   };
 
   return (
@@ -372,8 +376,12 @@ function LoginScreen({ classIndex, onLoginAttempt, onAdminLogin }) {
           ) : (
             <div className="space-y-3">
               <div>
-                <label className="text-xs font-medium text-gray-500 mb-1 block">Mã truy cập Ban tổ chức</label>
-                <Field icon={Lock} type="password" value={pin} onChange={(e) => setPin(e.target.value)} placeholder="Nhập mã" />
+                <label className="text-xs font-medium text-gray-500 mb-1 block">Email Ban tổ chức</label>
+                <Field icon={Mail} type="email" value={adminEmail} onChange={(e) => setAdminEmail(e.target.value)} placeholder="email@vietinbank.vn" />
+              </div>
+              <div>
+                <label className="text-xs font-medium text-gray-500 mb-1 block">Mật khẩu</label>
+                <Field icon={Lock} type="password" value={adminPassword} onChange={(e) => setAdminPassword(e.target.value)} placeholder="Mật khẩu" />
               </div>
               <div>
                 <label className="text-xs font-medium text-gray-500 mb-1 block">Mã lớp bạn muốn quản lý</label>
@@ -388,7 +396,7 @@ function LoginScreen({ classIndex, onLoginAttempt, onAdminLogin }) {
                 <p className="text-[11px] text-gray-400 mt-1.5">Nhập mã lớp đã có ở trên, hoặc gõ mã mới để tạo lớp mới.</p>
               </div>
               {error && <p className="accent-text text-xs">{error}</p>}
-              <button onClick={submitAdmin} className="w-full accent-bg text-white font-semibold py-3.5 rounded-xl active:scale-[0.98] transition mt-1">Vào Dashboard</button>
+              <button onClick={submitAdmin} disabled={submitting} className="w-full accent-bg text-white font-semibold py-3.5 rounded-xl active:scale-[0.98] transition mt-1 disabled:opacity-60">{submitting ? "Đang đăng nhập..." : "Vào Dashboard"}</button>
             </div>
           )}
         </Card>
@@ -1273,6 +1281,15 @@ export default function App() {
     return () => { clearInterval(intervalId); document.removeEventListener("visibilitychange", onVisible); };
   }, []);
 
+  // Bảo mật (Mức 1): tự động "đăng nhập ẩn danh" với Firebase ngay khi app mở lên — âm thầm, không
+  // ảnh hưởng gì đến cách học viên đăng nhập vào app (vẫn dùng User AD như cũ). Đây chỉ là điều kiện
+  // kỹ thuật bắt buộc để Firebase cho phép ghi dữ liệu (Rules mới yêu cầu request.auth != null).
+  useEffect(() => {
+    authApi.ensureAnonymous().catch(() => {
+      setSaveError("Không thể kết nối bảo mật. Vui lòng tải lại trang.");
+    });
+  }, []);
+
   // Tải danh sách mã lớp (tài liệu nhỏ, không phụ thuộc đăng nhập)
   const loadClassIndex = useCallback(async () => {
     try {
@@ -1388,11 +1405,27 @@ export default function App() {
     }
   };
 
-  const handleAdminLogin = async (classCode) => {
+  // Đăng xuất: nếu đang là Ban tổ chức (tài khoản thật), thoát hẳn khỏi Firebase Auth rồi tự đăng nhập
+  // ẩn danh lại — để không ai lỡ dùng tiếp phiên đăng nhập thật của BTC sau khi đã bấm đăng xuất.
+  const handleLogout = async () => {
+    setUser(null);
+    if (authApi.isAdminSignedIn()) {
+      await authApi.signOutAll();
+      await authApi.ensureAnonymous().catch(() => {});
+    }
+  };
+
+  const handleAdminLogin = async (classCode, email, password) => {
+    try {
+      await authApi.signInAdmin(email, password); // xác thực THẬT qua Firebase — thay cho mã cố định cũ
+    } catch (err) {
+      return { error: "Email hoặc mật khẩu Ban tổ chức không đúng." };
+    }
     setUser({ id: "admin", name: "Ban tổ chức", isAdmin: true, classCode });
     setView("admin");
     await registerClass(classCode);
     await loadClassData(classCode);
+    return { ok: true };
   };
   const switchAdminClass = async (classCode) => {
     setUser((u) => ({ ...u, classCode }));
@@ -1482,11 +1515,11 @@ export default function App() {
     <div className="min-h-screen app-bg flex" style={{ fontFamily: "'Inter', system-ui, -apple-system, sans-serif" }}>
       <BrandStyles />
       <UpdateBanner show={newVersionAvailable} />
-      <Sidebar view={view} setView={setView} items={navItems} user={user} onLogout={() => setUser(null)} existingClasses={classIndex} onSwitchClass={switchAdminClass} />
+      <Sidebar view={view} setView={setView} items={navItems} user={user} onLogout={handleLogout} existingClasses={classIndex} onSwitchClass={switchAdminClass} />
 
       <div className="flex-1 min-w-0">
         <div className="flex items-center justify-end px-5 pt-3 md:hidden">
-          <button onClick={() => setUser(null)} className="flex items-center gap-1 text-xs text-gray-400"><LogOut size={13} /> Đăng xuất</button>
+          <button onClick={handleLogout} className="flex items-center gap-1 text-xs text-gray-400"><LogOut size={13} /> Đăng xuất</button>
         </div>
         {saveError && <div className="mx-5 md:mx-8 mt-3 md:mt-6 bg-red-50 accent-text text-xs px-3 py-2 rounded-lg">{saveError}</div>}
 
