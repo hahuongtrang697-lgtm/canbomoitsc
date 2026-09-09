@@ -877,11 +877,12 @@ function AdminScreen({ entries, scoredEntries, roster, classCode, classStartDate
         "Early Bird": (earlyMap[dayKey(e.timestamp)] || []).includes(e.id) ? "Có" : "",
         "Thời gian nhập": new Date(e.timestamp).toLocaleString("vi-VN"),
         "Danh mục": e.group,
+        "Tiêu chí cụ thể": e.item,
         "Bối cảnh": e.context, "Hành vi thực hiện": e.action, "Kết quả đạt được": e.result,
       };
     });
     const ws = XLSX.utils.json_to_sheet(rows);
-    ws["!cols"] = [{ wch: 12 }, { wch: 20 }, { wch: 22 }, { wch: 20 }, { wch: 8 }, { wch: 10 }, { wch: 14 }, { wch: 22 }, { wch: 10 }, { wch: 18 }, { wch: 26 }, { wch: 40 }, { wch: 40 }, { wch: 40 }];
+    ws["!cols"] = [{ wch: 12 }, { wch: 20 }, { wch: 22 }, { wch: 20 }, { wch: 8 }, { wch: 10 }, { wch: 14 }, { wch: 22 }, { wch: 10 }, { wch: 18 }, { wch: 26 }, { wch: 26 }, { wch: 40 }, { wch: 40 }, { wch: 40 }];
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Ứng dụng sau đào tạo");
     XLSX.writeFile(wb, `bao-cao-ung-dung-${todayKey()}.xlsx`);
