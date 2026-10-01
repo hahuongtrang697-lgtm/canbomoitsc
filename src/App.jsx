@@ -5,7 +5,7 @@ import {
   Sunrise, AlertCircle, Check, User, Lock, Mail, Upload, UserPlus, KeyRound, Ban, Trash2,
   Menu, LayoutDashboard, Users2, Home as HomeIcon, List, Building2,
 } from "lucide-react";
-import { storage, authApi } from "./firebase.js";
+import { storage, authApi, entriesApi, studentAccountApi } from "./firebase.js";
 
 // ---------- Domain constants (PRD v1.1) ----------
 const CATEGORY_GROUPS = [
@@ -25,8 +25,12 @@ const PROGRAM_DAYS = 10;
 const COMPLETION_THRESHOLD = 8; // Số ngày tối thiểu để tính là "hoàn thành toàn khóa"
 const CLASS_INDEX_KEY = "classIndex";
 const rosterKey = (c) => `roster_${c}`;
-const entriesKey = (c) => `entries_${c}`;
 const settingsKey = (c) => `settings_${c}`;
+// entriesKey: CHỈ dùng cho lớp CŨ (schemaVersion 1) — bài ứng dụng gộp 1 khối JSON trong appdata.
+// Lớp MỚI (schemaVersion 2) dùng entriesApi trong firebase.js (subcollection classes/{c}/entries).
+const entriesKey = (c) => `entries_${c}`;
+const LEGACY_SCHEMA_VERSION = 1;
+const CURRENT_SCHEMA_VERSION = 2;
 const storageGet = (key) => storage.get(key);
 const storageSet = (key, value) => storage.set(key, value);
 // storageUpdate: dùng Firestore Transaction THẬT — Firebase tự đảm bảo không ai ghi đè mất
@@ -1092,10 +1096,12 @@ function ClassesOverviewScreen({ classIndex, currentClass, onSwitchClass, onGoTo
       const errored = [];
       for (const c of classIndex) {
         try {
-          const r = await storageGet(rosterKey(c));
-          const e = await storageGet(entriesKey(c));
+          const [r, s] = await Promise.all([storageGet(rosterKey(c)), storageGet(settingsKey(c))]);
+          const ver = (s ? JSON.parse(s.value).schemaVersion : null) || LEGACY_SCHEMA_VERSION;
+          const entriesArr = ver === CURRENT_SCHEMA_VERSION
+            ? await entriesApi.list(c)
+            : await storageGet(entriesKey(c)).then((x) => (x ? JSON.parse(x.value) : []));
           const rosterArr = r ? JSON.parse(r.value) : [];
-          const entriesArr = e ? JSON.parse(e.value) : [];
           let lastActivity = null;
           entriesArr.forEach((en) => { if (!lastActivity || en.timestamp > lastActivity) lastActivity = en.timestamp; });
           results.push({ classCode: c, studentCount: rosterArr.length, entryCount: entriesArr.length, lastActivity });
@@ -1227,6 +1233,7 @@ export default function App() {
   const [classIndex, setClassIndex] = useState([]); // danh sách mã lớp đã biết (tài liệu nhỏ, dùng chung)
   const [roster, setRoster] = useState([]); // roster của ĐÚNG lớp đang hoạt động (đã tách riêng theo lớp)
   const [entries, setEntries] = useState([]); // entries của ĐÚNG lớp đang hoạt động
+  const [schemaVersion, setSchemaVersion] = useState(LEGACY_SCHEMA_VERSION); // 1 = lớp cũ, 2 = lớp mới (Mức 2)
   const [defaultPassword, setDefaultPassword] = useState("123456");
   const [classStartDate, setClassStartDate] = useState(""); // ngày bắt đầu lớp (yyyy-mm-dd), để trống = không áp dụng
   const [classEndDate, setClassEndDate] = useState("");
@@ -1269,9 +1276,10 @@ export default function App() {
     return () => { clearInterval(intervalId); document.removeEventListener("visibilitychange", onVisible); };
   }, []);
 
-  // Bảo mật (Mức 1): tự động "đăng nhập ẩn danh" với Firebase ngay khi app mở lên — âm thầm, không
-  // ảnh hưởng gì đến cách học viên đăng nhập vào app (vẫn dùng User AD như cũ). Đây chỉ là điều kiện
-  // kỹ thuật bắt buộc để Firebase cho phép ghi dữ liệu (Rules mới yêu cầu request.auth != null).
+  // Bảo mật: tự động "đăng nhập ẩn danh" với Firebase ngay khi app mở lên — vẫn cần cho HỌC VIÊN
+  // LỚP CŨ (schemaVersion 1, dùng khối JSON entries_{classCode}, Rules yêu cầu request.auth != null
+  // để ghi). Học viên lớp MỚI (schemaVersion 2) sẽ tự thay phiên ẩn danh này bằng phiên đăng nhập
+  // THẬT ngay khi họ đăng nhập thành công (xem attemptLogin) — không cần làm gì thêm ở đây.
   useEffect(() => {
     authApi.ensureAnonymous().catch(() => {
       setSaveError("Không thể kết nối bảo mật. Vui lòng tải lại trang.");
@@ -1312,17 +1320,23 @@ export default function App() {
     try {
       // KHÔNG dùng .catch(() => null) ở đây nữa — nếu đọc lỗi thật (mất mạng...), phải BÁO LỖI RÕ,
       // chứ không được âm thầm coi như "không có dữ liệu" rồi hiện trống trơn (trông như mất bài).
-      const [r, e, s] = await Promise.all([
+      // Phải đọc settings TRƯỚC để biết lớp này schemaVersion mấy, mới biết đọc entries ở đâu.
+      const [r, s] = await Promise.all([
         storageGet(rosterKey(classCode)),
-        storageGet(entriesKey(classCode)),
         storageGet(settingsKey(classCode)),
       ]);
+      const settingsObj = s ? JSON.parse(s.value) : {};
+      const ver = settingsObj.schemaVersion || LEGACY_SCHEMA_VERSION;
+      const e = ver === CURRENT_SCHEMA_VERSION
+        ? await entriesApi.list(classCode)
+        : (await storageGet(entriesKey(classCode)).then((x) => (x ? JSON.parse(x.value) : [])));
       setRoster(r ? JSON.parse(r.value) : []);
-      setEntries(e ? JSON.parse(e.value) : []);
-      setDefaultPassword(s ? (JSON.parse(s.value).defaultPassword || "123456") : "123456");
-      setClassStartDate(s ? (JSON.parse(s.value).classStartDate || "") : "");
-      setClassEndDate(s ? (JSON.parse(s.value).classEndDate || "") : "");
-      setExcludedDates(s ? (JSON.parse(s.value).excludedDates || []) : []);
+      setEntries(e || []);
+      setSchemaVersion(ver);
+      setDefaultPassword(settingsObj.defaultPassword || "123456");
+      setClassStartDate(settingsObj.classStartDate || "");
+      setClassEndDate(settingsObj.classEndDate || "");
+      setExcludedDates(settingsObj.excludedDates || []);
       setClassDataLoaded(true);
     } catch (err) {
       setClassLoadError("Không tải được dữ liệu (có thể do mất mạng). Dữ liệu của bạn vẫn an toàn trên hệ thống — chỉ là chưa tải lên được. Vui lòng bấm Thử lại.");
@@ -1330,7 +1344,8 @@ export default function App() {
     }
   }, []);
 
-  // persistRoster/persistEntries giờ nhận HÀM MÔ TẢ CÁCH SỬA (không phải mảng đã tính sẵn) —
+  // persistRoster nhận HÀM MÔ TẢ CÁCH SỬA (không phải mảng đã tính sẵn) — riêng entries (Mức 2)
+  // dùng addEntryRemote/removeEntryRemote (từng document, xem trên) thay vì persistEntries kiểu cũ.
   // storageUpdate sẽ tự lấy đúng dữ liệu MỚI NHẤT trên máy chủ ngay tại thời điểm ghi rồi mới áp
   // dụng thay đổi, nên dù có người khác vừa ghi thêm gì đó ngay trước đó cũng không bị mất.
   const persistRoster = async (mutatorFn) => {
@@ -1343,20 +1358,46 @@ export default function App() {
       throw e;
     }
   };
-  const persistEntries = async (mutatorFn) => {
+  // Lớp CŨ (schemaVersion 1): entries vẫn là 1 khối JSON, mutatorFn trên cả mảng — GIỮ NGUYÊN như
+  // Mức 1, không đụng vào (2 lớp cũ đã quyết định không migrate).
+  const persistEntriesLegacy = async (mutatorFn) => {
     try {
       const next = await storageUpdate(entriesKey(user.classCode), (current) => mutatorFn(current || []));
       setEntries(next);
       return next;
     } catch (e) {
       setSaveError("Lỗi lưu dữ liệu.");
+      throw e;
+    }
+  };
+  // Lớp MỚI (schemaVersion 2): thêm/xóa từng document riêng qua entriesApi.
+  const addEntryRemote = async (entry) => {
+    if (schemaVersion !== CURRENT_SCHEMA_VERSION) return persistEntriesLegacy((current) => [...current, entry]);
+    try {
+      const saved = await entriesApi.add(user.classCode, entry);
+      setEntries((current) => [...current, saved]);
+      return saved;
+    } catch (e) {
+      setSaveError("Lỗi lưu dữ liệu.");
       throw e; // ném lỗi ra ngoài để nơi gọi (VD: form thêm bài) biết mà KHÔNG đóng form/coi như thành công
+    }
+  };
+  const removeEntryRemote = async (entryId) => {
+    if (schemaVersion !== CURRENT_SCHEMA_VERSION) return persistEntriesLegacy((current) => current.filter((e) => e.id !== entryId));
+    try {
+      await entriesApi.remove(user.classCode, entryId);
+      setEntries((current) => current.filter((e) => e.id !== entryId));
+    } catch (e) {
+      setSaveError("Lỗi xóa bài.");
+      throw e;
     }
   };
   // Lưu cấu hình lớp (mật khẩu mặc định / ngày bắt đầu / ngày kết thúc / ngày nghỉ) — luôn ghi ĐỦ
   // cả 4 trường cùng lúc để không vô tình xóa mất các trường khác đã lưu trước đó.
   const persistSettingsField = async (updates) => {
-    const next = { defaultPassword, classStartDate, classEndDate, excludedDates, ...updates };
+    // Luôn giữ lại schemaVersion hiện tại của lớp — tuyệt đối không để lần ghi cấu hình nào vô tình
+    // làm mất dấu "lớp này là Mức 2" (mặc định JSON.stringify bỏ field undefined nên phải viết rõ).
+    const next = { defaultPassword, classStartDate, classEndDate, excludedDates, schemaVersion, ...updates };
     if (updates.defaultPassword !== undefined) setDefaultPassword(updates.defaultPassword);
     if (updates.classStartDate !== undefined) setClassStartDate(updates.classStartDate);
     if (updates.classEndDate !== undefined) setClassEndDate(updates.classEndDate);
@@ -1380,7 +1421,21 @@ export default function App() {
         const acc = list.find((u) => normUsername(u.username) === normUsername(username));
         if (acc) {
           if (acc.locked) return { error: "Tài khoản đã bị khóa. Vui lòng liên hệ Ban tổ chức." };
-          if (acc.password !== password) return { error: "User AD hoặc mật khẩu không đúng." };
+          // Cần biết lớp này schemaVersion mấy để chọn đúng cách kiểm tra mật khẩu.
+          const s = await storageGet(settingsKey(c));
+          const ver = (s ? JSON.parse(s.value).schemaVersion : null) || LEGACY_SCHEMA_VERSION;
+          if (ver === CURRENT_SCHEMA_VERSION) {
+            // Lớp MỚI (Mức 2): mật khẩu được Firebase Auth thật kiểm tra (không so sánh chuỗi nữa)
+            // — đăng nhập thành công tức là có 1 authUid thật để gắn vào mọi bài nộp.
+            try {
+              await authApi.signInStudent(acc.id, password);
+            } catch (err) {
+              return { error: "User AD hoặc mật khẩu không đúng." };
+            }
+          } else {
+            // Lớp CŨ (Mức 1): giữ nguyên cách kiểm tra cũ — so sánh trực tiếp với roster.
+            if (acc.password !== password) return { error: "User AD hoặc mật khẩu không đúng." };
+          }
           setUser({ ...acc, isAdmin: false });
           await loadClassData(c);
           setView("home");
@@ -1393,14 +1448,16 @@ export default function App() {
     }
   };
 
-  // Đăng xuất: nếu đang là Ban tổ chức (tài khoản thật), thoát hẳn khỏi Firebase Auth rồi tự đăng nhập
-  // ẩn danh lại — để không ai lỡ dùng tiếp phiên đăng nhập thật của BTC sau khi đã bấm đăng xuất.
+  // Đăng xuất: thoát hẳn khỏi Firebase Auth (dù là BTC hay học viên) — Mức 2 không còn phiên ẩn
+  // danh "nền" nào để tự đăng nhập lại nữa, đăng xuất là đăng xuất thật.
+  // Đăng xuất: thoát hẳn khỏi phiên Auth hiện tại (BTC hoặc học viên lớp mới), rồi quay lại phiên
+  // ẩn danh — BẮT BUỘC phải có bước này vì học viên LỚP CŨ vẫn cần "request.auth != null" (ẩn danh)
+  // để ghi bài; không làm bước này, học viên lớp cũ đăng nhập sau khi có người khác vừa đăng xuất
+  // sẽ không nộp bài được (Firestore từ chối ghi vì không có auth nào).
   const handleLogout = async () => {
     setUser(null);
-    if (authApi.isAdminSignedIn()) {
-      await authApi.signOutAll();
-      await authApi.ensureAnonymous().catch(() => {});
-    }
+    await authApi.signOutAll();
+    await authApi.ensureAnonymous().catch(() => {});
   };
 
   const handleAdminLogin = async (email, password) => {
@@ -1414,42 +1471,115 @@ export default function App() {
     setView("classes");
     return { ok: true };
   };
+  // Nếu classCode CHƯA từng có trong classIndex, đây là LỚP MỚI → khởi tạo cấu hình với
+  // schemaVersion = 2 (Mức 2) NGAY TỪ ĐẦU, trước khi tải dữ liệu lớp. Lớp đã tồn tại từ trước thì
+  // không đụng vào settings — giữ đúng schemaVersion đang có (mặc định 1 nếu chưa có field này).
   const switchAdminClass = async (classCode) => {
+    const isNewClass = !classIndex.includes(classCode);
     setUser((u) => ({ ...u, classCode }));
     setView("admin");
+    if (isNewClass) {
+      try {
+        await storageSet(settingsKey(classCode), JSON.stringify({
+          defaultPassword: "123456", classStartDate: "", classEndDate: "", excludedDates: [],
+          schemaVersion: CURRENT_SCHEMA_VERSION,
+        }));
+      } catch (e) { setSaveError("Lỗi khởi tạo lớp mới."); }
+    }
     await registerClass(classCode);
     await loadClassData(classCode);
   };
 
   const handleSaveEntry = async ({ group, item, context, action, result }) => {
-    const entry = { id: uid(), userId: user.id, userName: user.name, dept: user.dept, classCode: user.classCode, group, item, context, action, result, timestamp: Date.now() };
-    await persistEntries((current) => [...current, entry]);
+    // id: vẫn cần cho LỚP CŨ (định danh bài trong khối JSON) — lớp MỚI sẽ bỏ field này, dùng ID
+    // Firestore tự sinh (xem entriesApi.add trong firebase.js).
+    // authUid: UID Firebase Auth THẬT của học viên — CHỈ có giá trị với lớp MỚI (lớp cũ đăng nhập
+    // ẩn danh nên authUid không gắn với ai cụ thể, Rules của lớp cũ cũng không dùng field này).
+    const entry = {
+      id: uid(), userId: user.id, userName: user.name, dept: user.dept, classCode: user.classCode,
+      group, item, context, action, result, timestamp: Date.now(),
+      authUid: schemaVersion === CURRENT_SCHEMA_VERSION ? authApi.currentUid() : null,
+    };
+    await addEntryRemote(entry);
     setShowAdd(false);
   };
   // Ban tổ chức xóa 1 bài ứng dụng — điểm/streak/bảng xếp hạng tự tính lại ngay vì đều tính động từ entries
-  const deleteEntry = (entryId) => persistEntries((current) => current.filter((e) => e.id !== entryId));
+  const deleteEntry = (entryId) => removeEntryRemote(entryId);
 
-  // Admin: account management actions — luôn thao tác trên đúng roster của lớp đang hoạt động
-  const addAccount = ({ name, username, dept }) => persistRoster((current) => {
-    if (current.some((u) => normUsername(u.username) === normUsername(username))) return current; // trùng User AD, bỏ qua
-    return [...current, { id: uid(), name, username, dept, classCode: user.classCode, password: defaultPassword, locked: false }];
-  });
-  const bulkImport = async (parsed) => {
-    let addedCount = 0;
-    await persistRoster((current) => {
-      const existing = new Set(current.map((u) => normUsername(u.username)));
-      const toAdd = parsed.filter((p) => !existing.has(normUsername(p.username))).map((p) => ({ id: uid(), name: p.name, username: normUsername(p.username), dept: p.dept, classCode: user.classCode, password: defaultPassword, locked: false }));
-      addedCount = toAdd.length;
-      return [...current, ...toAdd];
+  // Admin: account management actions — luôn thao tác trên đúng roster của lớp đang hoạt động.
+  // Lớp MỚI (Mức 2): mọi thay đổi tài khoản phải gọi thêm studentAccountApi (Vercel Serverless
+  // Function → Firebase Admin SDK) để tài khoản Auth thật khớp với roster. Lớp CŨ (Mức 1): giữ
+  // nguyên hành vi gốc — chỉ sửa roster, không có tài khoản Auth thật nào để đồng bộ.
+  const isLevel2 = schemaVersion === CURRENT_SCHEMA_VERSION;
+  const addAccount = async ({ name, username, dept }) => {
+    const newId = uid();
+    if (isLevel2) {
+      try {
+        await studentAccountApi.createStudentAuth(newId, defaultPassword);
+      } catch (e) {
+        setSaveError(`Lỗi tạo tài khoản đăng nhập: ${e.message}`);
+        throw e;
+      }
+    }
+    return persistRoster((current) => {
+      if (current.some((u) => normUsername(u.username) === normUsername(username))) return current; // trùng User AD, bỏ qua
+      return [...current, { id: newId, name, username, dept, classCode: user.classCode, password: defaultPassword, locked: false }];
     });
-    return addedCount;
+  };
+  const bulkImport = async (parsed) => {
+    const existing = new Set(roster.map((u) => normUsername(u.username)));
+    const toAdd = parsed
+      .filter((p) => !existing.has(normUsername(p.username)))
+      .map((p) => ({ id: uid(), name: p.name, username: normUsername(p.username), dept: p.dept, classCode: user.classCode, password: defaultPassword, locked: false }));
+    if (isLevel2) {
+      // Tạo tài khoản Firebase Auth thật cho TỪNG người mới — chạy tuần tự (không phải Promise.all)
+      // để tránh dội quá nhiều yêu cầu cùng lúc vào API.
+      for (const p of toAdd) {
+        try {
+          await studentAccountApi.createStudentAuth(p.id, defaultPassword);
+        } catch (e) {
+          setSaveError(`Lỗi tạo tài khoản đăng nhập cho ${p.username}: ${e.message}`);
+        }
+      }
+    }
+    await persistRoster((current) => [...current, ...toAdd]);
+    return toAdd.length;
   };
   const toggleLock = (id) => persistRoster((current) => current.map((u) => (u.id === id ? { ...u, locked: !u.locked } : u)));
-  const resetPassword = (id) => persistRoster((current) => current.map((u) => (u.id === id ? { ...u, password: defaultPassword } : u)));
-  const deleteAccount = (id) => persistRoster((current) => current.filter((u) => u.id !== id));
+  // Lớp MỚI (Mức 2): đổi mật khẩu gọi API (Vercel Serverless + Admin SDK) để mật khẩu Auth thật
+  // đổi THEO ĐÚNG mật khẩu hiển thị trong roster — không còn lệch nhau như cách làm tạm trước đó.
+  // Lớp CŨ (Mức 1): chỉ sửa roster như gốc (không có tài khoản Auth thật để đồng bộ).
+  const resetPassword = async (id) => {
+    if (isLevel2) {
+      try {
+        await studentAccountApi.resetStudentPassword(id, defaultPassword);
+      } catch (e) {
+        setSaveError(`Lỗi đổi mật khẩu đăng nhập: ${e.message}`);
+        throw e;
+      }
+    }
+    return persistRoster((current) => current.map((u) => (u.id === id ? { ...u, password: defaultPassword } : u)));
+  };
+  const deleteAccount = async (id) => {
+    if (isLevel2) {
+      try {
+        await studentAccountApi.deleteStudentAuth(id);
+      } catch (e) {
+        setSaveError(`Lỗi xóa tài khoản đăng nhập: ${e.message}`);
+        throw e;
+      }
+    }
+    return persistRoster((current) => current.filter((u) => u.id !== id));
+  };
   const deleteClassData = async () => {
     await persistRoster(() => []);
-    await persistEntries(() => []);
+    if (isLevel2) {
+      const all = await entriesApi.list(user.classCode);
+      await Promise.all(all.map((e) => entriesApi.remove(user.classCode, e.id)));
+    } else {
+      await persistEntriesLegacy(() => []);
+    }
+    setEntries([]);
     try {
       const next = await storageUpdate(CLASS_INDEX_KEY, (current) => (current || []).filter((c) => c !== user.classCode));
       setClassIndex(next);
