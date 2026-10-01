@@ -22,17 +22,26 @@
 //
 // Không đưa file service-account .json lên Git — chỉ dùng để tạo chuỗi base64 rồi xóa khỏi máy.
 
-import admin from "firebase-admin";
+// Dùng import "modular" (khuyến nghị chính thức từ firebase-admin v12+) thay vì kiểu cũ
+// `import admin from "firebase-admin"` — cách cũ dựa vào 1 object "admin" gộp chung (admin.apps,
+// admin.auth(), admin.firestore()...) và từng gây lỗi "Cannot read properties of undefined
+// (reading 'length')" ngay tại admin.apps.length khi chạy trong môi trường ES Module (project này
+// có "type": "module") trên Vercel — interop giữa CommonJS (firebase-admin) và ESM không trả về
+// đúng object "admin" như mong đợi. Cách modular dưới đây import thẳng từng hàm cần dùng, không phụ
+// thuộc vào object gộp đó nên tránh được lỗi này.
+import { initializeApp, cert, getApps } from "firebase-admin/app";
+import { getAuth } from "firebase-admin/auth";
+import { getFirestore } from "firebase-admin/firestore";
 
 function loadCredential() {
   const b64 = process.env.FIREBASE_SERVICE_ACCOUNT_BASE64;
   if (b64) {
     // Cách ưu tiên — không có ký tự \n nào cần xử lý tay, không thể dán sai định dạng.
     const json = JSON.parse(Buffer.from(b64, "base64").toString("utf8"));
-    return admin.credential.cert(json);
+    return cert(json);
   }
   // Cách cũ (3 biến riêng) — giữ lại để không phá vỡ cấu hình nếu ai đó đã làm theo cách này.
-  return admin.credential.cert({
+  return cert({
     projectId: process.env.FIREBASE_PROJECT_ID,
     clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
     privateKey: (process.env.FIREBASE_PRIVATE_KEY || "").replace(/\\n/g, "\n"),
@@ -44,10 +53,10 @@ function loadCredential() {
 // cũng crash với trang lỗi trắng "500 FUNCTION_INVOCATION_FAILED" không rõ nguyên nhân. Giờ lỗi này
 // (nếu còn) sẽ trả về đúng dạng JSON {"error": "..."} dễ đọc hơn nhiều.
 function ensureInitialized() {
-  if (!admin.apps.length) {
-    admin.initializeApp({ credential: loadCredential() });
+  if (!getApps().length) {
+    initializeApp({ credential: loadCredential() });
   }
-  return { auth: admin.auth(), db: admin.firestore() };
+  return { auth: getAuth(), db: getFirestore() };
 }
 
 const STUDENT_EMAIL_DOMAIN = "cbm-app.internal";
