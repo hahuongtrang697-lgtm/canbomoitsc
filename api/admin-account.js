@@ -7,38 +7,55 @@
 //
 // CÀI ĐẶT (làm 1 lần, trên Vercel Dashboard của project canbomoitsc-v2):
 //   1. Firebase Console → Project settings → Service accounts → "Generate new private key"
-//      → mở file .json vừa tải, copy 3 giá trị sau vào Vercel → Project → Settings →
-//      Environment Variables:
-//        FIREBASE_PROJECT_ID    = project_id trong file json
-//        FIREBASE_CLIENT_EMAIL  = client_email trong file json
-//        FIREBASE_PRIVATE_KEY   = private_key trong file json (dán NGUYÊN VĂN, giữ các \n)
-//   2. npm install firebase-admin (thêm vào package.json của repo chính, KHÔNG phải file riêng)
-//   3. git push — Vercel tự deploy, route sẽ chạy tại /api/admin-account
+//      → tải file .json về.
+//   2. Mã hoá CẢ FILE đó thành 1 chuỗi base64 (tránh lỗi copy/dán thủ công từng trường hay bị sai
+//      định dạng \n của private_key) — chạy 1 trong 2 lệnh sau trên máy bạn, kết quả tự copy vào
+//      clipboard luôn, không hiện ra màn hình:
+//        macOS (Terminal):   base64 -i duong-dan-file.json | pbcopy
+//        Windows (PowerShell): [Convert]::ToBase64String([IO.File]::ReadAllBytes("duong-dan-file.json")) | Set-Clipboard
+//   3. Vercel → Project → Settings → Environment Variables → thêm 1 biến DUY NHẤT:
+//        FIREBASE_SERVICE_ACCOUNT_BASE64 = (dán clipboard — Ctrl+V / Cmd+V)
+//      (Giữ lại hay xoá 3 biến FIREBASE_PROJECT_ID/FIREBASE_CLIENT_EMAIL/FIREBASE_PRIVATE_KEY cũ
+//      đều được — code dưới đây ưu tiên biến base64 này nếu có, bỏ qua 3 biến cũ.)
+//   4. npm install firebase-admin (thêm vào package.json của repo chính, KHÔNG phải file riêng)
+//   5. git push + Redeploy trên Vercel — route sẽ chạy tại /api/admin-account
 //
-// Không đưa file service-account .json lên Git — chỉ dùng để copy giá trị vào Environment Variables
-// rồi xóa khỏi máy.
+// Không đưa file service-account .json lên Git — chỉ dùng để tạo chuỗi base64 rồi xóa khỏi máy.
 
 import admin from "firebase-admin";
 
-if (!admin.apps.length) {
-  admin.initializeApp({
-    credential: admin.credential.cert({
-      projectId: process.env.FIREBASE_PROJECT_ID,
-      clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-      privateKey: (process.env.FIREBASE_PRIVATE_KEY || "").replace(/\\n/g, "\n"),
-    }),
+function loadCredential() {
+  const b64 = process.env.FIREBASE_SERVICE_ACCOUNT_BASE64;
+  if (b64) {
+    // Cách ưu tiên — không có ký tự \n nào cần xử lý tay, không thể dán sai định dạng.
+    const json = JSON.parse(Buffer.from(b64, "base64").toString("utf8"));
+    return admin.credential.cert(json);
+  }
+  // Cách cũ (3 biến riêng) — giữ lại để không phá vỡ cấu hình nếu ai đó đã làm theo cách này.
+  return admin.credential.cert({
+    projectId: process.env.FIREBASE_PROJECT_ID,
+    clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+    privateKey: (process.env.FIREBASE_PRIVATE_KEY || "").replace(/\\n/g, "\n"),
   });
 }
 
-const auth = admin.auth();
-const db = admin.firestore();
+// Khởi tạo "lazy" — chỉ chạy khi có request thật, bọc trong try/catch ở handler bên dưới. Trước đây
+// initializeApp() chạy ngay lúc import (module load), nên nếu credential sai định dạng, request NÀO
+// cũng crash với trang lỗi trắng "500 FUNCTION_INVOCATION_FAILED" không rõ nguyên nhân. Giờ lỗi này
+// (nếu còn) sẽ trả về đúng dạng JSON {"error": "..."} dễ đọc hơn nhiều.
+function ensureInitialized() {
+  if (!admin.apps.length) {
+    admin.initializeApp({ credential: loadCredential() });
+  }
+  return { auth: admin.auth(), db: admin.firestore() };
+}
 
 const STUDENT_EMAIL_DOMAIN = "cbm-app.internal";
 const studentEmailOf = (rosterId) => `${rosterId}@${STUDENT_EMAIL_DOMAIN}`;
 
 // BTC = tài khoản Auth có email THẬT (không phải email giả cấp cho học viên) — cùng quy tắc đang
 // dùng trong firestore.rules, để nhất quán.
-async function requireAdmin(idToken) {
+async function requireAdmin(auth, idToken) {
   if (!idToken) throw new Error("Thiếu idToken.");
   const decoded = await auth.verifyIdToken(idToken);
   if (!decoded.email || decoded.email.endsWith(`@${STUDENT_EMAIL_DOMAIN}`)) {
@@ -47,7 +64,7 @@ async function requireAdmin(idToken) {
   return decoded; // decoded.email, decoded.uid
 }
 
-async function logAudit(action, adminEmail, detail) {
+async function logAudit(db, action, adminEmail, detail) {
   try {
     await db.collection("auditLog").add({
       action, adminEmail, detail, timestamp: Date.now(),
@@ -62,7 +79,8 @@ export default async function handler(req, res) {
   }
   const { action, idToken, rosterId, password, newPassword } = req.body || {};
   try {
-    const admin_ = await requireAdmin(idToken);
+    const { auth, db } = ensureInitialized();
+    const admin_ = await requireAdmin(auth, idToken);
 
     if (action === "create-student") {
       if (!rosterId || !password) throw new Error("Thiếu rosterId hoặc password.");
@@ -76,7 +94,7 @@ export default async function handler(req, res) {
         const created = await auth.createUser({ email, password, emailVerified: true });
         uid = created.uid;
       }
-      await logAudit("create-student", admin_.email, { rosterId });
+      await logAudit(db, "create-student", admin_.email, { rosterId });
       res.status(200).json({ ok: true, uid });
       return;
     }
@@ -85,7 +103,7 @@ export default async function handler(req, res) {
       if (!rosterId || !newPassword) throw new Error("Thiếu rosterId hoặc newPassword.");
       const user = await auth.getUserByEmail(studentEmailOf(rosterId));
       await auth.updateUser(user.uid, { password: newPassword });
-      await logAudit("reset-password", admin_.email, { rosterId });
+      await logAudit(db, "reset-password", admin_.email, { rosterId });
       res.status(200).json({ ok: true });
       return;
     }
@@ -98,7 +116,7 @@ export default async function handler(req, res) {
       } catch (e) {
         if (e.code !== "auth/user-not-found") throw e; // đã xóa từ trước — coi như thành công
       }
-      await logAudit("delete-student", admin_.email, { rosterId });
+      await logAudit(db, "delete-student", admin_.email, { rosterId });
       res.status(200).json({ ok: true });
       return;
     }
