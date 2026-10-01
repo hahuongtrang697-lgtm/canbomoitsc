@@ -26,33 +26,34 @@
 // `import admin from "firebase-admin"` — cách cũ dựa vào 1 object "admin" gộp chung (admin.apps,
 // admin.auth(), admin.firestore()...) và từng gây lỗi "Cannot read properties of undefined
 // (reading 'length')" ngay tại admin.apps.length khi chạy trong môi trường ES Module (project này
-// có "type": "module") trên Vercel — interop giữa CommonJS (firebase-admin) và ESM không trả về
-// đúng object "admin" như mong đợi. Cách modular dưới đây import thẳng từng hàm cần dùng, không phụ
-// thuộc vào object gộp đó nên tránh được lỗi này.
-import { initializeApp, cert, getApps } from "firebase-admin/app";
-import { getAuth } from "firebase-admin/auth";
-import { getFirestore } from "firebase-admin/firestore";
+// có "type": "module") trên Vercel.
+//
+// QUAN TRỌNG: import bằng `await import(...)` (động) thay vì `import ... from` (tĩnh) ở đầu file —
+// nếu Vercel không bundle đúng các sub-path "firebase-admin/app"/"auth"/"firestore", lỗi sẽ xảy ra
+// NGAY LÚC NẠP MODULE với kiểu import tĩnh, khiến handler() không bao giờ chạy được, trả về trang lỗi
+// trắng không rõ nguyên nhân (kể cả request GET đơn giản cũng lỗi). Import động đặt lỗi này vào ĐÚNG
+// bên trong try/catch của ensureInitialized(), để nếu có lỗi gì (kể cả lỗi "Cannot find module") đều
+// trả về dạng JSON {"error": "[INIT] ..."} đọc được, không còn trang lỗi trắng nữa.
+async function ensureInitialized() {
+  const { initializeApp, cert, getApps } = await import("firebase-admin/app");
+  const { getAuth } = await import("firebase-admin/auth");
+  const { getFirestore } = await import("firebase-admin/firestore");
 
-function loadCredential() {
-  const b64 = process.env.FIREBASE_SERVICE_ACCOUNT_BASE64;
-  if (b64) {
-    // Cách ưu tiên — không có ký tự \n nào cần xử lý tay, không thể dán sai định dạng.
-    const json = JSON.parse(Buffer.from(b64, "base64").toString("utf8"));
-    return cert(json);
+  function loadCredential() {
+    const b64 = process.env.FIREBASE_SERVICE_ACCOUNT_BASE64;
+    if (b64) {
+      // Cách ưu tiên — không có ký tự \n nào cần xử lý tay, không thể dán sai định dạng.
+      const json = JSON.parse(Buffer.from(b64, "base64").toString("utf8"));
+      return cert(json);
+    }
+    // Cách cũ (3 biến riêng) — giữ lại để không phá vỡ cấu hình nếu ai đó đã làm theo cách này.
+    return cert({
+      projectId: process.env.FIREBASE_PROJECT_ID,
+      clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+      privateKey: (process.env.FIREBASE_PRIVATE_KEY || "").replace(/\\n/g, "\n"),
+    });
   }
-  // Cách cũ (3 biến riêng) — giữ lại để không phá vỡ cấu hình nếu ai đó đã làm theo cách này.
-  return cert({
-    projectId: process.env.FIREBASE_PROJECT_ID,
-    clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-    privateKey: (process.env.FIREBASE_PRIVATE_KEY || "").replace(/\\n/g, "\n"),
-  });
-}
 
-// Khởi tạo "lazy" — chỉ chạy khi có request thật, bọc trong try/catch ở handler bên dưới. Trước đây
-// initializeApp() chạy ngay lúc import (module load), nên nếu credential sai định dạng, request NÀO
-// cũng crash với trang lỗi trắng "500 FUNCTION_INVOCATION_FAILED" không rõ nguyên nhân. Giờ lỗi này
-// (nếu còn) sẽ trả về đúng dạng JSON {"error": "..."} dễ đọc hơn nhiều.
-function ensureInitialized() {
   if (!getApps().length) {
     initializeApp({ credential: loadCredential() });
   }
@@ -93,7 +94,7 @@ export default async function handler(req, res) {
   // đâu ngay trên giao diện app (khung đỏ), không cần vào Vercel Logs mò nữa.
   let auth, db;
   try {
-    ({ auth, db } = ensureInitialized());
+    ({ auth, db } = await ensureInitialized());
   } catch (err) {
     res.status(500).json({ error: `[INIT] ${err && err.message ? err.message : String(err)}` });
     return;
