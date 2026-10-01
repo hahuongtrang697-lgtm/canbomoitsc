@@ -78,10 +78,27 @@ export default async function handler(req, res) {
     return;
   }
   const { action, idToken, rosterId, password, newPassword } = req.body || {};
-  try {
-    const { auth, db } = ensureInitialized();
-    const admin_ = await requireAdmin(auth, idToken);
 
+  // TẠM THỜI (phục vụ gỡ lỗi): tách riêng từng giai đoạn — khởi tạo Admin SDK / xác thực BTC / xử lý
+  // action — và gắn nhãn [INIT]/[AUTH]/[ACTION] vào đầu thông báo lỗi, để biết chính xác đang kẹt ở
+  // đâu ngay trên giao diện app (khung đỏ), không cần vào Vercel Logs mò nữa.
+  let auth, db;
+  try {
+    ({ auth, db } = ensureInitialized());
+  } catch (err) {
+    res.status(500).json({ error: `[INIT] ${err && err.message ? err.message : String(err)}` });
+    return;
+  }
+
+  let admin_;
+  try {
+    admin_ = await requireAdmin(auth, idToken);
+  } catch (err) {
+    res.status(403).json({ error: `[AUTH] ${err && err.message ? err.message : String(err)}` });
+    return;
+  }
+
+  try {
     if (action === "create-student") {
       if (!rosterId || !password) throw new Error("Thiếu rosterId hoặc password.");
       const email = studentEmailOf(rosterId);
@@ -121,8 +138,8 @@ export default async function handler(req, res) {
       return;
     }
 
-    res.status(400).json({ error: `Không hỗ trợ action "${action}".` });
+    res.status(400).json({ error: `[ACTION] Không hỗ trợ action "${action}".` });
   } catch (err) {
-    res.status(403).json({ error: err.message || "Lỗi xác thực/quyền." });
+    res.status(500).json({ error: `[ACTION] ${err && err.message ? err.message : String(err)}` });
   }
 }
